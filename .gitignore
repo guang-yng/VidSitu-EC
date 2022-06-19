@@ -10,3 +10,7 @@ SlowFast/*
 cocoapi/*
 coval/*
 fairseq/*
+coco-caption/
+
+weights
+run*.sh

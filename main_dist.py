@@ -2,6 +2,8 @@
 Main file for distributed training
 """
 import torch
+import numpy as np
+import random
 import fire
 from functools import partial
 import sys
@@ -92,6 +94,9 @@ def learner_init(uid: str, cfg: CN) -> Learner:
 
 
 def main_fn(cfg):
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
     uid = cfg.uid
     learn = learner_init(uid, cfg)
 

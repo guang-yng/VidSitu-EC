@@ -592,7 +592,6 @@ class Learner:
             # Increment number of iterations
             self.num_it += 1
             batch = move_to(batch, self.device)
-            self.optimizer.zero_grad()
             out = self.mdl(batch)
             out_loss = self.loss_fn(out, batch)
             loss = out_loss[self.loss_keys[0]]
@@ -600,7 +599,10 @@ class Learner:
             if torch.isnan(loss).any():
                 print("Pain In", batch["vseg_idx"])
             loss.backward()
-            self.optimizer.step()
+
+            if self.num_it % 1 == 0:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
             # Returns original dictionary if not distributed parallel
             # loss_reduced = reduce_dict(out_loss, average=True)
@@ -809,6 +811,7 @@ class Learner:
             st_time = time.time()
         try:
             # Loop over epochs
+            self.save_model_dict(mdl_epocher=True)
             for epoch in mb:
                 self.num_epoch += 1
                 train_loss, train_acc = self.train_epoch(mb)
