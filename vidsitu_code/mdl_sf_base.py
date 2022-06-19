@@ -751,8 +751,10 @@ class Reorderer:
 def get_head_dim(full_cfg) -> int:
     if "i3d" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
         head_dim = 2048
-    elif ("slow_fast" in full_cfg.ds.vsitu.vsit_frm_feats_dir) or (
-        "sfast" in full_cfg.ds.vsitu.vsit_frm_feats_dir
+    elif (
+        ("slow_fast" in full_cfg.ds.vsitu.vsit_frm_feats_dir) 
+        or ("sfast" in full_cfg.ds.vsitu.vsit_frm_feats_dir) 
+        or ("slowfast" in full_cfg.ds.vsitu.vsit_frm_feats_dir)
     ):
         head_dim = 2304
     else:

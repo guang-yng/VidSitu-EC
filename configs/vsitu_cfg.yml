@@ -88,6 +88,7 @@ train:
   lr: 1e-4
   epochs: 10
   bs: 16
+  gradient_accumulation: 1
   nw: 4
   bsv: 16
   nwv: 4

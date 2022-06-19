@@ -348,6 +348,10 @@ class Learner:
         self.num_it = 0
         self.num_epoch = 0
         self.best_met = 0
+        if "gradient_accumulation" in self.cfg.train:
+            self.grad_acc = self.cfg.train["gradient_accumulation"]
+        else:
+            self.grad_acc = 0
 
         # Resume if given a path
         if self.cfg.train["resume"]:
@@ -600,7 +604,7 @@ class Learner:
                 print("Pain In", batch["vseg_idx"])
             loss.backward()
 
-            if self.num_it % 1 == 0:
+            if self.num_it % self.grad_acc == 0:
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
