@@ -1,6 +1,8 @@
 from vidsitu_code.mdl_sf_base import (
     SFBase,
     LossB,
+    SFBaseEC,
+    LossEC_WPG,
     Simple_GPT2_New,
     LossLambda,
     Simple_TxDec,
@@ -26,8 +28,12 @@ from vidsitu_code.mdl_evrel import (
 def get_mdl_loss_eval(cfg):
     assert cfg.task_type in set(["vb", "vb_arg", "evrel", "evforecast"])
     if cfg.task_type == "vb":
-        assert cfg.mdl.mdl_name == "sf_base"
-        return {"mdl": SFBase, "loss": LossB, "evl": EvalB}
+        if cfg.mdl.mdl_name == "sf_base":
+            return {"mdl": SFBase, "loss": LossB, "evl": EvalB}
+        elif cfg.mdl.mdl_name == "sf_ec":
+            return {"mdl": SFBaseEC, "loss": LossEC_WPG, "eval": EvalB}
+        else:
+            raise NotImplementedError
     elif cfg.task_type == "vb_arg":
         if cfg.mdl.mdl_name == "new_gpt2_only":
             return {"mdl": Simple_GPT2_New, "loss": LossLambda, "evl": EvalB_Gen}

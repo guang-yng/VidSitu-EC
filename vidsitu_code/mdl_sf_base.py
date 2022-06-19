@@ -231,6 +231,136 @@ class LossB(nn.Module):
         return {"loss": loss}
 
 
+class SFBaseEC(SFBase):
+    def __init__(self, cfg, comm):
+        super(SFBaseEC, self).__init__(cfg, comm)
+        din = sum(self.head.dim_in)
+        self.vfeat_head = nn.Linear(din, 768)
+
+    def forward_encoder(self, inp):
+        feats_used = self.get_feats(inp)
+        nfeats_used = len(feats_used)
+        feat_out = self.sf_mdl.forward_features(feats_used)
+        assert len(feat_out) == nfeats_used
+
+        bbox = inp['obj_bbox_slow']
+        B = len(bbox)
+        frm_feat = feat_out[0].view(B, 5, 2048, 8, 7, 7)
+
+        obj_feat = []
+        for i in range(B):
+            obj_feat.append([])
+            for ev in range(5):
+                obj_feat[-1].append([])
+                for obj in bbox[i][ev]:
+                    feat_obj = []
+                    for t in range(8):
+                        if obj[t][0] == obj[t][2] or obj[t][1] == obj[t][3]:
+                            feat = torch.zeros((2048), device="cuda")
+                        else:
+                            feat = frm_feat[i, ev, :, t, obj[t][0]:obj[t][2], obj[t][1]:obj[t][3]].mean(dim=(1, 2))
+                        feat_obj.append(feat.view(2048))
+                    obj_feat[-1][-1].append(torch.stack(feat_obj).mean(dim=0))
+                obj_feat[-1][-1] = F.normalize(torch.stack(obj_feat[-1][-1]))
+            obj_feat[-1] = torch.stack(obj_feat[-1])
+        
+        obj_feat_slow = torch.stack(obj_feat)
+
+        bbox = inp['obj_bbox_fast']
+        frm_feat = feat_out[1].view(B, 5, 256, 32, 7, 7)
+
+        obj_feat = []
+        for i in range(B):
+            obj_feat.append([])
+            for ev in range(5):
+                obj_feat[-1].append([])
+                for obj in bbox[i][ev]:
+                    feat_obj = []
+                    for t in range(32):
+                        if obj[t][0] == obj[t][2] or obj[t][1] == obj[t][3]:
+                            feat = torch.zeros((256), device="cuda")
+                        else:
+                            feat = frm_feat[i, ev, :, t, obj[t][0]:obj[t][2], obj[t][1]:obj[t][3]].mean(dim=(1, 2))
+                        feat_obj.append(feat.view(256))
+                    obj_feat[-1][-1].append(torch.stack(feat_obj).mean(dim=0))
+                obj_feat[-1][-1] = F.normalize(torch.stack(obj_feat[-1][-1]))
+            obj_feat[-1] = torch.stack(obj_feat[-1])
+        
+        obj_feat_fast = torch.stack(obj_feat)
+        obj_feat = self.vfeat_head(torch.cat([obj_feat_slow, obj_feat_fast], dim=3))
+
+        return feat_out, obj_feat
+
+    def forward(self, inp: Dict):
+        feat_out, obj_feat = self.forward_encoder(inp)
+        mdl_out = self.forward_decoder(feat_out, inp)
+
+        return {"mdl_out": mdl_out, "obj_feat": obj_feat}
+
+
+class LossEC_WPG(nn.Module):
+    def __init__(self, cfg, comm):
+        super().__init__()
+        self.loss_verb = LossB(cfg, comm)
+        self.threshold = 1
+        self.t = 20
+        self.c = nn.CrossEntropyLoss()
+        self.loss_keys = ["loss"]
+
+    def forward(self, mdl_out, inp):
+        loss_v = self.loss_verb(mdl_out, inp)['loss']
+
+        # obj_feat: B x 5 x 8 x 768
+        # txt_feat: B x 5 x 4 x 768
+        obj_feat = mdl_out['obj_feat']
+        txt_feat = F.normalize(inp['text_feature'], dim=3)
+
+        B = len(txt_feat)
+        obj_feature = obj_feat.view(40*B, 768)
+        arg_feature = torch.cat([txt_feat[:, :, 0:1, :], txt_feat[:, :, 2:, :]], dim=2).view(-1, 768)
+        # obj_feature: 40B x 768
+        # arg_feature: 15B x 768
+        logits = arg_feature @ obj_feature.T * self.t
+        logits = logits.view(B*5, 3, B*5, 8)
+        # find most matched texts for objects
+        max_value, max_indices = logits.max(dim=3)
+        logits = logits.view(B*5, 3, -1)
+        labels = torch.cat([torch.tensor([max_indices[i, j, i]+(i<<3) for j in range(3)], device="cuda") for i in range(B*5)], dim=0)
+
+        loss_wpg = self.c(logits.reshape(B*15, -1), labels)
+        mask = max_value > self.threshold
+
+        mask = (mask.transpose(0, 1) * torch.eye(5*B, device="cuda")).sum(dim=2, dtype=torch.bool).transpose(0, 1)
+        max_indices = (max_indices.transpose(0, 1) * torch.eye(5*B, device="cuda")).sum(dim=2, dtype=torch.long).transpose(0, 1)
+
+        arg_feature = arg_feature.view(5*B, 3, 768)
+        txt_feat = txt_feat.view(5*B, 4, 768)
+        te_feature = (arg_feature.permute( (2, 0, 1)) * mask).sum(dim = 2).T + txt_feat[:, 1, :]
+
+        obj_feature = obj_feature.view(5*B, 8, 768)
+        ve_feature = []
+        for i in range(5*B):
+            ve_feature.append(
+                torch.index_select(
+                    obj_feature[i, :, :], dim=0, 
+                    index=torch.masked_select(max_indices[i, :], mask[i, :])
+                ).sum(dim=0)
+            )
+        ve_feature = torch.stack(ve_feature)
+
+        te_feature = F.normalize(te_feature, dim=1)
+        ve_feature = F.normalize(ve_feature, dim=1)
+
+        logits = te_feature @ ve_feature.T * self.t
+
+        labels = torch.arange(5*B, device="cuda")
+        loss_1 = self.c(logits, labels)
+        loss_2 = self.c(logits.T, labels)
+        loss_ec = (loss_1+loss_2)/2
+
+        return {"loss": (loss_wpg+loss_v+loss_ec)/3}
+
+
 class LossLambda(nn.Module):
     def __init__(self, cfg, comm):
         super().__init__()
