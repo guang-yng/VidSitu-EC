@@ -1,0 +1,12 @@
+temp_dir/
+tmp/
+*__pycache__/
+data/*
+!data/*.md
+mlruns/
+*cookies*
+
+SlowFast/*
+cocoapi/*
+coval/*
+fairseq/*
