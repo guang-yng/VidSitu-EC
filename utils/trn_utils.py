@@ -599,7 +599,7 @@ class Learner:
             out = self.mdl(batch)
             out_loss = self.loss_fn(out, batch)
             loss = out_loss[self.loss_keys[0]]
-            loss = loss.mean()
+            loss = loss.mean() / self.grad_acc
             if torch.isnan(loss).any():
                 print("Pain In", batch["vseg_idx"])
             loss.backward()
