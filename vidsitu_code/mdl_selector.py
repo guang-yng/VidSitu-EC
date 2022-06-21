@@ -31,7 +31,7 @@ def get_mdl_loss_eval(cfg):
         if cfg.mdl.mdl_name == "sf_base":
             return {"mdl": SFBase, "loss": LossB, "evl": EvalB}
         elif cfg.mdl.mdl_name == "sf_ec":
-            return {"mdl": SFBaseEC, "loss": LossEC_WPG, "eval": EvalB}
+            return {"mdl": SFBaseEC, "loss": LossEC_WPG, "evl": EvalB}
         else:
             raise NotImplementedError
     elif cfg.task_type == "vb_arg":

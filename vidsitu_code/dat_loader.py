@@ -18,7 +18,12 @@ from utils.dat_utils import (
     pad_tokens,
     read_file_with_assertion,
 )
-from transformers import GPT2TokenizerFast, RobertaTokenizerFast
+from transformers import GPT2TokenizerFast, RobertaTokenizerFast, RobertaModel
+from utils.trn_utils import get_rank
+import os
+import time
+from tqdm import tqdm
+from math import floor
 
 
 def st_ag(ag):
@@ -77,11 +82,20 @@ class VsituDS(Dataset):
         self.comm.fps = fps
         self.comm.cent_frm_per_ev = cent_frm_per_ev
         self.comm.max_frms = 300
+        self.comm.need_objs = False
+        self.comm.need_text_feats = False
+        if self.full_cfg.task_type == "vb":
+            if "ec" in self.full_cfg.mdl.mdl_name:
+                self.comm.need_text_feats = True
+                self.comm.need_objs = True
 
         self.comm.vb_id_vocab = read_file_with_assertion(
             self.cfg.vocab_files.verb_id_vocab, reader="pickle"
         )
         self.comm.rob_hf_tok = RobertaTokenizerFast.from_pretrained(
+            self.full_cfg.mdl.rob_mdl_name
+        )
+        self.comm.rob_hf_tok_pad = RobertaTokenizerFast.from_pretrained(
             self.full_cfg.mdl.rob_mdl_name
         )
         self.comm.gpt2_hf_tok = read_file_with_assertion(
@@ -139,6 +153,7 @@ class VsituDS(Dataset):
 
     def read_files(self, split_type: str):
         self.vsitu_frm_dir = Path(self.cfg.video_frms_tdir)
+        self.vsitu_obj_dir = Path(self.cfg.object_dir)
         split_files_cfg = self.cfg.split_files_lb
         vsitu_ann_files_cfg = self.cfg.vsitu_ann_files_lb
         vinfo_files_cfg = self.cfg.vinfo_files_lb
@@ -171,6 +186,195 @@ class VsituDS(Dataset):
                 vseg_info["vb_id_lst_new"] = vid_seg_ann_lst
                 vsitu_vinfo_dct[vseg] = vseg_info
             self.vsitu_vinfo_dct = vsitu_vinfo_dct
+    
+        if get_rank() == 0:
+            if self.comm.need_text_feats:
+                self.read_text_features()
+            if self.comm.need_objs:
+                self.read_obj_features()
+        else:
+            while not os.path.exists(self.vsitu_frm_dir/f'text_feature_{self.split_type}.done'):
+                time.sleep(10)
+            while not os.path.exists(self.vsitu_frm_dir/f'obj_feature_{self.split_type}.done'):
+                time.sleep(10)
+
+    def read_text_features(self):
+        if os.path.exists(self.vsitu_frm_dir/f'text_feature_{self.split_type}.done'):
+            print(f"[INFO] Use preprocessed text features for {self.split_type}")
+            return
+
+        voc_to_use = self.comm.vb_id_vocab
+        tokenizer = self.comm.rob_hf_tok
+        tokenizer_pad = self.comm.rob_hf_tok_pad
+        rb_mdl = RobertaModel.from_pretrained(self.full_cfg.mdl.rob_mdl_name)
+        rb_mdl = rb_mdl.to('cuda')
+        rb_mdl.eval()
+        print(f"[INFO] Start Text Feature Processing for {self.split_type}...")
+        for vseg_id in tqdm(self.vseg_lst):
+            file_name = self.vsitu_frm_dir / vseg_id / 'text_features.pt'
+
+            assert vseg_id in self.vsitu_ann_dct, f"No annotation for {vseg_id}."
+
+            ann_ = self.vsitu_ann_dct[vseg_id]
+            sent_list = []
+            text_arg_index = []
+            # Add Argument Info
+            for ev in range(1, 6):
+                if len(ann_) > 1:
+                    label_lst_one_ev = []
+                    label_to_id = {}
+                    for vseg_aix, vid_seg_ann in enumerate(ann_):
+                        if vseg_aix == 10:
+                            break
+                        vb_id = vid_seg_ann[f"Ev{ev}"]["VerbID"]
+
+                        if vb_id in voc_to_use.indices:
+                            label = voc_to_use.indices[vb_id]
+                        else:
+                            label = voc_to_use.unk_index
+                        label_lst_one_ev.append(label)
+                        label_to_id[label] = vseg_aix
+                    mc = Counter(label_lst_one_ev).most_common(1)
+                    vid_seg_ann = ann_[label_to_id[mc[0][0]]]
+                else:
+                    vid_seg_ann = ann_[0]
+
+                vb = vid_seg_ann[f"Ev{ev}"]["Verb"]
+                arg_list = vid_seg_ann[f"Ev{ev}"]["Arg_List"]
+                args = vid_seg_ann[f"Ev{ev}"]["Args"]
+                pos_arg_pair = [(arg_list[k], v) for k, v in args.items()]
+                pos_arg_pair.append(('0.5', vb))
+                arg_index = []
+                sent_text = ""
+                L = 0
+                for id, v in sorted(pos_arg_pair):
+                    txt = v.capitalize() if id == '0' else f' {v}'
+                    l = len(tokenizer.tokenize(txt))
+                    assert L+l < 512, f"Text label of {vseg_id} is too long"
+                    arg_index.append((L+1, L+l+1))
+                    sent_text += txt
+                    L += l
+
+                sent_text += '.'
+
+                sent_list.append(sent_text)
+                text_arg_index.append(arg_index)
+
+            tokenized = tokenizer_pad(sent_list, padding='max_length', return_tensors='pt')
+            tokenized = {k:v.to('cuda') for k, v in tokenized.items()}
+            text_feat = rb_mdl(**tokenized)
+            text_feat0 = text_feat[0].detach()
+            text_feature = []
+            for ev, feat in enumerate(text_feat0):
+                arg_feat = []
+                for arg_id in range(min(len(text_arg_index[ev]), 5)):
+                    if arg_id == 1:
+                        continue
+                    arg_range = text_arg_index[ev][arg_id]
+                    u = feat[arg_range[0]:arg_range[1], ]
+                    arg_feat.append(u.mean(dim=0, keepdim=True))
+                rem = 4 - len(arg_feat)
+                assert rem >= 0
+                arg_feat.append(torch.zeros((rem, 768), device='cuda'))
+                text_feature.append(torch.cat(arg_feat))
+
+            text_features = {
+                "text_feature": torch.stack(text_feature),
+                "pooled_feature": text_feat[1].detach(),
+            }
+            torch.save(text_features, file_name)
+            del tokenized, text_feat
+
+        del rb_mdl
+        torch.cuda.empty_cache()
+
+        with open(self.vsitu_frm_dir/f'text_feature_{self.split_type}.done', 'a') as f:
+            f.write(time.strftime("%D %H:%M:%S", time.localtime()))
+
+        print(f"[INFO] Text Feature Processing for {self.split_type} Done!")
+
+    def read_obj_features(self):
+        if os.path.exists(self.vsitu_frm_dir/f'obj_feature_{self.split_type}.done'):
+            print("[INFO] Use preprocessed object features")
+            return
+
+        print(f"[INFO] Start Object Bounding Box Processing for {self.split_type}...")
+        for vseg_id in tqdm(self.vseg_lst):
+            file_name = self.vsitu_frm_dir / vseg_id / 'objs_bbox.pt'
+
+            # Read Tracker Info
+            obj_dict = np.load(self.vsitu_obj_dir / f"{vseg_id}"/"obj_track.npy", allow_pickle=True).item()
+            if len(obj_dict) == 0:
+                assert vseg_id == "v_AX-qpuOuDVg_seg_75_85", f"No object in {vseg_id}."
+
+            obj_bbox_fast = []
+            obj_bbox_slow = []
+            for ev in range(1, 6):
+                ev_id = f"Ev{ev}"
+                center_ix = self.comm.cent_frm_per_ev[ev_id]
+                frms_ixs_for_ev = get_sequence(
+                    center_idx=center_ix,
+                    half_len=self.comm.frm_seq_len // 2,
+                    sample_rate=self.comm.sampling_rate,
+                    max_num_frames=300,
+                )
+                n_frms = len(frms_ixs_for_ev)
+                confidence_list = []
+                for k in obj_dict:
+                    confidence = []
+                    for f in frms_ixs_for_ev:
+                        idx = str(f)
+                        if idx not in obj_dict[k]:
+                            confidence.append(0)
+                        else:
+                            confidence.append(obj_dict[k][idx]['confidence'])
+                    conf = sum(confidence)/len(frms_ixs_for_ev)
+                    if conf == 0.0:
+                        continue
+                    confidence_list.append((conf, k))
+                
+                confidence_list.sort(reverse=True)
+                bbox_all = []
+                for _, k in confidence_list:
+                    bbox = []
+                    frm_dct = obj_dict[k]
+                    for f in frms_ixs_for_ev:
+                        idx = str(f)
+                        if idx not in frm_dct:
+                            bbox.append([0, 0, 0, 0])
+                        else:
+                            x0, y0, x1, y1 = frm_dct[idx]['box'].tolist()
+                            assert x1 > x0
+                            assert y1 > y0
+                            bbox.append([floor(x0/1280*7), floor(y0/720*7), floor(x1/1280*7)+1, floor(y1/720*7)+1])
+
+                    bbox_all.append(bbox)
+
+                if len(bbox_all) < 8:
+                    rem = 8 - len(bbox_all)
+                    n_frms = len(frms_ixs_for_ev)
+                    bbox_all += [[[0, 0, 0, 0] for _ in range(n_frms)] for i in range(rem)]
+                bbox_fast = torch.tensor(bbox_all[:8])
+                bbox_slow = torch.index_select(
+                    bbox_fast,
+                    1,
+                    torch.linspace(
+                        0, bbox_fast.shape[1]-1, bbox_fast.shape[1] // self.sf_cfg.SLOWFAST.ALPHA
+                    ).long()
+                )
+                obj_bbox_fast.append(bbox_fast)
+                obj_bbox_slow.append(bbox_slow)
+
+            obj_bbox = {
+                "obj_bbox_fast": torch.stack(obj_bbox_fast),
+                "obj_bbox_slow": torch.stack(obj_bbox_slow),
+            }
+            torch.save(obj_bbox, file_name)
+
+        with open(self.vsitu_frm_dir/f'obj_feature_{self.split_type}.done', 'a') as f:
+            f.write(time.strftime("%D %H:%M:%S", time.localtime()))
+
+        print(f"[INFO] Object Bounding Box Processing for {self.split_type} Done!")
 
     def __len__(self) -> int:
         if self.full_cfg.debug_mode:
@@ -498,6 +702,10 @@ class VsituDS(Dataset):
             frms_all_ev_slow = np.stack(frms_by_ev_slow)
             out_dct["frms_ev_slow_tensor"] = torch.from_numpy(frms_all_ev_slow).float()
 
+        if self.comm.need_objs:
+            file_name = self.vsitu_frm_dir / vid_seg_name / "objs_bbox.pt"
+            out_dct = coalesce_dicts([out_dct, torch.load(file_name, map_location=torch.device('cpu'))])
+
         return out_dct
 
     def get_frm_feats_all(self, idx: int):
@@ -522,6 +730,14 @@ class VsituDS(Dataset):
             label_out_dct = self.get_vb_data(vid_seg_ann_)
         else:
             raise NotImplementedError
+
+        if self.comm.need_text_feats:
+            file_name = self.vsitu_frm_dir / vid_seg_name / "text_features.pt"
+            if os.path.exists(file_name):
+                feature_dict = torch.load(file_name, map_location=torch.device('cpu'))
+                label_out_dct.update(feature_dict)
+            else:
+                raise FileNotFoundError(f"{file_name} not found.")
 
         return label_out_dct
 
