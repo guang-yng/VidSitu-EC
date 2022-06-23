@@ -797,7 +797,7 @@ class Learner:
         # Print logger at the start of the training loop
         self.logger.info(self.cfg)
         # Initialize the progress_bar
-        mb = master_bar(range(epochs))
+        mb = master_bar(range(self.num_epoch, epochs))
         # Initialize optimizer
         # Prepare Optimizer may need to be re-written as per use
         self.optimizer = self.prepare_optimizer(params_opt_dict)

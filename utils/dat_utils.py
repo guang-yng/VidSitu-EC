@@ -67,6 +67,7 @@ def get_dataloader(cfg, dataset: Dataset, is_train: bool, collate_fn) -> DataLoa
         drop_last=is_train,
         num_workers=num_workers,
         collate_fn=collator,
+        pin_memory=True,
     )
 
 
