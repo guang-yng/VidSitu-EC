@@ -44,6 +44,11 @@ class VsituDS_All(VsituDS):
         self.comm.fps = fps
         self.comm.cent_frm_per_ev = cent_frm_per_ev
         self.comm.max_frms = 300
+        if self.full_cfg.task_type == "vb":
+            if "ec" in self.full_cfg.mdl.mdl_name:
+                self.comm.need_text_feats = True
+                self.comm.need_objs = True
+
         self.comm.vb_id_vocab = read_file_with_assertion(
             self.cfg.vocab_files.verb_id_vocab, reader="pickle"
         )
@@ -93,14 +98,19 @@ class FeatExtract:
         for batch in tqdm(self.dl):
             batch_gpu = move_to(batch, torch.device("cuda"))
             feat_out = self.mdl.forward_encoder(batch_gpu)
-            head_out = self.mdl.head(feat_out)
-            # (B, C, T, H, W) -> (B, T, H, W, C).
-            head_out = head_out.permute((0, 2, 3, 4, 1))
             B = len(batch["vseg_idx"])
-            assert head_out.size(1) == 1
-            assert head_out.size(2) == 1
-            assert head_out.size(3) == 1
-            out = head_out.view(B, 5, -1)
+            if not self.dl.dataset.comm.need_objs:
+                head_out = self.mdl.head(feat_out)
+                head_out = head_out.permute((0, 2, 3, 4, 1))
+                assert head_out.size(1) == 1
+                assert head_out.size(2) == 1
+                assert head_out.size(3) == 1
+                out = head_out.view(B, 5, -1)
+            else:
+                obj_out = feat_out[1]
+                head_out = self.mdl.head(feat_out[0])
+                out  = torch.cat([head_out.view(B, 5, -1), obj_out.mean(dim=-2)], dim=-1)
+            # (B, C, T, H, W) -> (B, T, H, W, C).
             out_np = out.cpu().numpy()
 
             for vix in range(B):
