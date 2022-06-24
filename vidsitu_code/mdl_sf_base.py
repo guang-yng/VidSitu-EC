@@ -361,6 +361,41 @@ class LossEC_WPG(nn.Module):
         return {"loss": (loss_wpg+loss_v+loss_ec)/3}
 
 
+class SFBaseECCat(SFBaseEC):
+    def __init__(self, cfg, comm):
+        super(SFBaseECCat, self).__init__(cfg, comm)
+
+    def build_projection_head(self, cfg, out_dim=None):
+        if out_dim is None:
+            out_dim = len(self.comm.vb_id_vocab)
+        din = sum(self.head.dim_in+768)
+        self.proj_head = nn.Sequential(
+            *[nn.Linear(din, din // 2), nn.ReLU(), nn.Linear(din // 2, out_dim)]
+        )
+
+    def forward_decoder(self, enc_out, obj_feat, inp):
+        # enc_out: List
+        # len(enc_out) = nfeats_used
+        # enc_out[0]: B x C x T x H x W
+        B = len(inp["vseg_idx"])
+        head_out = self.head(enc_out)
+        # (B, C, T, H, W) -> (B, T, H, W, C).
+        head_out = head_out.permute((0, 2, 3, 4, 1))
+
+        out = torch.cat([head_out.view(B, 5, -1), obj_feat.mean(dim=-2)], dim=-1)
+
+        proj_out = self.proj_head(head_out)
+        out = proj_out.view(B, 5, -1)
+        assert out.size(-1) == len(self.comm.vb_id_vocab)
+        return out
+
+    def forward(self, inp: Dict):
+        feat_out, obj_feat = self.forward_encoder(inp)
+        mdl_out = self.forward_decoder(feat_out, obj_feat, inp)
+
+        return {"mdl_out": mdl_out, "obj_feat": obj_feat}
+
+
 class LossLambda(nn.Module):
     def __init__(self, cfg, comm):
         super().__init__()

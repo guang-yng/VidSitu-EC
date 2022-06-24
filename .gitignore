@@ -14,4 +14,4 @@ coco-caption/
 
 weights
 run*.sh
-feat_extract.sh
+feat_extract*.sh
