@@ -44,9 +44,9 @@ class VsituDS_All(VsituDS):
         self.comm.fps = fps
         self.comm.cent_frm_per_ev = cent_frm_per_ev
         self.comm.max_frms = 300
+        self.comm.need_objs = False
         if self.full_cfg.task_type == "vb":
             if "ec" in self.full_cfg.mdl.mdl_name:
-                self.comm.need_text_feats = True
                 self.comm.need_objs = True
 
         self.comm.vb_id_vocab = read_file_with_assertion(
@@ -62,8 +62,11 @@ class VsituDS_All(VsituDS):
 
     def read_files(self, split_type: str):
         self.vsitu_frm_dir = Path(self.cfg.video_frms_tdir)
+        self.vsitu_obj_dir = Path(self.cfg.object_dir)
         vseg_lst = read_file_with_assertion(self.cfg.split_files_lb[split_type])
         self.vseg_lst = vseg_lst
+        if self.comm.need_objs:
+            self.read_obj_features()
 
     def __getitem__(self, index: int) -> Dict:
         return self.itemgetter(index)
@@ -172,7 +175,7 @@ def main(mdl_resume_path: str, mdl_name_used: str, is_cu: bool = False, **kwargs
 
     mdl.to(torch.device("cuda"))
 
-    for split_type in ["valid", "train", "test_verb", "test_srl", "test_evrel"]:
+    for split_type in ["test_evrel", "valid", "train", "test_verb", "test_srl"]:
         if comm is None:
             comm = {}
         ds = VsituDS_All(cfg, comm, split_type=split_type)
