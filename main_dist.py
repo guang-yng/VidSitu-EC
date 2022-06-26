@@ -94,9 +94,9 @@ def learner_init(uid: str, cfg: CN) -> Learner:
 
 
 def main_fn(cfg):
-    random.seed(0)
-    np.random.seed(0)
-    torch.manual_seed(0)
+    random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
     uid = cfg.uid
     learn = learner_init(uid, cfg)
 
