@@ -368,7 +368,7 @@ class SFBaseECCat(SFBaseEC):
     def build_projection_head(self, cfg, out_dim=None):
         if out_dim is None:
             out_dim = len(self.comm.vb_id_vocab)
-        din = sum(self.head.dim_in+768)
+        din = sum(self.head.dim_in)+768
         self.proj_head = nn.Sequential(
             *[nn.Linear(din, din // 2), nn.ReLU(), nn.Linear(din // 2, out_dim)]
         )
@@ -384,7 +384,7 @@ class SFBaseECCat(SFBaseEC):
 
         out = torch.cat([head_out.view(B, 5, -1), obj_feat.mean(dim=-2)], dim=-1)
 
-        proj_out = self.proj_head(head_out)
+        proj_out = self.proj_head(out)
         out = proj_out.view(B, 5, -1)
         assert out.size(-1) == len(self.comm.vb_id_vocab)
         return out
@@ -916,6 +916,8 @@ class Reorderer:
 def get_head_dim(full_cfg) -> int:
     if "i3d" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
         head_dim = 2048
+    elif "slowfast_ec" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
+        head_dim = 3072
     elif (
         ("slow_fast" in full_cfg.ds.vsitu.vsit_frm_feats_dir) 
         or ("sfast" in full_cfg.ds.vsitu.vsit_frm_feats_dir) 
