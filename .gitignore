@@ -4,6 +4,7 @@ tmp/
 data/*
 !data/*.md
 mlruns/
+results/
 *cookies*
 
 SlowFast/*
@@ -15,3 +16,8 @@ coco-caption/
 weights
 run*.sh
 feat_extract*.sh
+eval.sh
+
+*.pkl
+*.pt
+*.np

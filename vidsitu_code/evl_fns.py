@@ -372,6 +372,63 @@ class EvlFn_Vb:
         return out_dct
 
 
+class EvlFn_Vb_Comp(EvlFn_Vb):
+    def vb_classf_metrics_all(self, hyps0: Dict, hyps1: Dict, gts: Dict):
+        """
+        Assumes hyps, gts dicts with keys as video ids (10-sec)
+        """
+        assert set(hyps0.keys()) == set(gts.keys())
+        assert set(hyps1.keys()) == set(gts.keys())
+        vid_key_lst = sorted(list(hyps0.keys()))
+        ev_lst = [f"Ev{ix}" for ix in self.evix_lst]
+        better_vid = []
+
+        for vid_key in vid_key_lst:
+            hypos0 = hyps0[vid_key]
+            hypos1 = hyps1[vid_key]
+            gts1 = gts[vid_key]
+            assert len(hypos0) == len(ev_lst)
+            assert len(hypos1) == len(ev_lst)
+            assert len(gts1) == len(ev_lst)
+            corr_ev_lst0 = {f"Top_{k}": [] for k in range(1, 6)}
+            corr_ev_lst1 = {f"Top_{k}": [] for k in range(1, 6)}
+            for ev_i in ev_lst:
+                hy0 = hypos0[ev_i]
+                hy1 = hypos1[ev_i]
+                gt1 = gts1[ev_i]
+                for topk in range(1, 6):
+                    corr_one0 = int(len(set(hy0[:topk]).intersection(gt1)) > 0)
+                    corr_one1 = int(len(set(hy1[:topk]).intersection(gt1)) > 0)
+                    corr_ev_lst0[f"Top_{topk}"].append(corr_one0)
+                    corr_ev_lst1[f"Top_{topk}"].append(corr_one1)
+                
+            better = True
+            gap = []
+            for topk in range(1, 6):
+                if sum(corr_ev_lst0[f"Top_{topk}"]) < sum(corr_ev_lst1[f"Top_{topk}"]):
+                    better = False
+                    break
+                if sum(corr_ev_lst0[f"Top_{topk}"]) < 4:
+                    better = False
+                    break
+                if sum(corr_ev_lst1[f"Top_{topk}"]) > 2:
+                    better = False
+                    break
+                gap.append((sum(corr_ev_lst0[f"Top_{topk}"]), sum(corr_ev_lst1[f"Top_{topk}"])))
+            if better:
+                better_vid.append((vid_key, self.vseg_lst[vid_key], hypos0, hypos1, gts1, gap))
+
+        return better_vid
+
+    def simple_acc(self, pred_file0: str, pred_file1: str, split_type: str = "valid"):
+        hypos0, gts = self.prepare_hyp_gts(pred_file=pred_file0, split_type=split_type)
+        hypos1, gts1 = self.prepare_hyp_gts(pred_file=pred_file1, split_type=split_type)
+        assert gts1 == gts
+
+        better_vid = self.vb_classf_metrics_all(hyps0=hypos0, hyps1=hypos1, gts=gts)
+        return better_vid
+
+
 class EvalFnCap:
     def __init__(self, cfg, comm, met_keys, read_val_file: bool = True):
         self.cfg = cfg
@@ -714,10 +771,11 @@ def main(
     vsitu_ann_file_path: str,
     split_type: str,
     out_file: str = "./results/results.json",
+    pred_file1: str = "./b.pkl",
     **kwargs,
 ):
 
-    cfg = CN(yaml.safe_load(open("./eval_files/vsitu_cfg.yml")))
+    cfg = CN(yaml.safe_load(open("./configs/vsitu_cfg.yml")))
 
     assert "valid" in split_type or "test" in split_type
 
@@ -741,7 +799,9 @@ def main(
         out_met = evl_cap.eval_cap_mets(pred_file=pred_file, split_type=split_type)
 
         out_results = {k: float(v) for k, v in out_met.items() if "sent" not in k}
-
+    elif task_type == "vb_comp":
+        evl_vb = EvlFn_Vb_Comp(cfg, {}, ["acc"])
+        out_results = evl_vb.simple_acc(pred_file0=pred_file, pred_file1=pred_file1, split_type=split_type)
     elif task_type == "vb":
         evl_vb = EvlFn_Vb(cfg, {}, ["acc"])
         out_met = evl_vb.simple_acc(pred_file=pred_file, split_type=split_type)
