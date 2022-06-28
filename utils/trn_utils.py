@@ -655,7 +655,7 @@ class Learner:
             self.logger.info(f"No existing model in {mfile}, starting from scratch")
             return
         try:
-            checkpoint = torch.load(open(mfile, "rb"))
+            checkpoint = torch.load(open(mfile, "rb"), map_location="cpu")
             self.logger.info(f"Loaded model from {mfile} Correctly")
         except OSError as e:
             self.logger.error(

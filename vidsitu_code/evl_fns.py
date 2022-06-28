@@ -390,33 +390,18 @@ class EvlFn_Vb_Comp(EvlFn_Vb):
             assert len(hypos0) == len(ev_lst)
             assert len(hypos1) == len(ev_lst)
             assert len(gts1) == len(ev_lst)
-            corr_ev_lst0 = {f"Top_{k}": [] for k in range(1, 6)}
-            corr_ev_lst1 = {f"Top_{k}": [] for k in range(1, 6)}
+            c = 0
             for ev_i in ev_lst:
                 hy0 = hypos0[ev_i]
                 hy1 = hypos1[ev_i]
                 gt1 = gts1[ev_i]
-                for topk in range(1, 6):
-                    corr_one0 = int(len(set(hy0[:topk]).intersection(gt1)) > 0)
-                    corr_one1 = int(len(set(hy1[:topk]).intersection(gt1)) > 0)
-                    corr_ev_lst0[f"Top_{topk}"].append(corr_one0)
-                    corr_ev_lst1[f"Top_{topk}"].append(corr_one1)
+                corr_one0 = int(len(set(hy0[:3]).intersection(gt1)) > 0)
+                corr_one1 = int(len(set(hy1[:3]).intersection(gt1)) > 0)
+                if corr_one0 > corr_one1:
+                    c += 1
                 
-            better = True
-            gap = []
-            for topk in range(1, 6):
-                if sum(corr_ev_lst0[f"Top_{topk}"]) < sum(corr_ev_lst1[f"Top_{topk}"]):
-                    better = False
-                    break
-                if sum(corr_ev_lst0[f"Top_{topk}"]) < 4:
-                    better = False
-                    break
-                if sum(corr_ev_lst1[f"Top_{topk}"]) > 2:
-                    better = False
-                    break
-                gap.append((sum(corr_ev_lst0[f"Top_{topk}"]), sum(corr_ev_lst1[f"Top_{topk}"])))
-            if better:
-                better_vid.append((vid_key, self.vseg_lst[vid_key], hypos0, hypos1, gts1, gap))
+            if c == 4:
+                better_vid.append((vid_key, self.vseg_lst[vid_key], hypos0, hypos1, gts1))
 
         return better_vid
 
