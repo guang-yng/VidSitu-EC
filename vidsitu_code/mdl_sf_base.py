@@ -364,11 +364,12 @@ class LossEC_WPG(nn.Module):
 class SFBaseECCat(SFBaseEC):
     def __init__(self, cfg, comm):
         super(SFBaseECCat, self).__init__(cfg, comm)
+        self.trans = nn.TransformerEncoderLayer(d_model=768, nhead=12)
 
     def build_projection_head(self, cfg, out_dim=None):
         if out_dim is None:
             out_dim = len(self.comm.vb_id_vocab)
-        din = sum(self.head.dim_in)+768
+        din = sum(self.head.dim_in)
         self.proj_head = nn.Sequential(
             *[nn.Linear(din, din // 2), nn.ReLU(), nn.Linear(din // 2, out_dim)]
         )
@@ -382,7 +383,11 @@ class SFBaseECCat(SFBaseEC):
         # (B, C, T, H, W) -> (B, T, H, W, C).
         head_out = head_out.permute((0, 2, 3, 4, 1))
 
-        out = torch.cat([head_out.view(B, 5, -1), obj_feat.mean(dim=-2)], dim=-1)
+        head_out = head_out.view(B*5, -1, 768)
+        obj_feat = obj_feat.view(B*5, -1, 768)
+        inp = torch.cat([head_out, obj_feat], dim=1)
+        out = self.trans(inp)
+        out = out[:, :3, ].flatten(start_dim=1)
 
         proj_out = self.proj_head(out)
         out = proj_out.view(B, 5, -1)

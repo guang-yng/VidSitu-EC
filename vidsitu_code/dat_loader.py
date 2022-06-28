@@ -309,6 +309,7 @@ class VsituDS(Dataset):
 
             obj_bbox_fast = []
             obj_bbox_slow = []
+            obj_conf = []
             for ev in range(1, 6):
                 ev_id = f"Ev{ev}"
                 center_ix = self.comm.cent_frm_per_ev[ev_id]
@@ -335,7 +336,8 @@ class VsituDS(Dataset):
                 
                 confidence_list.sort(reverse=True)
                 bbox_all = []
-                for _, k in confidence_list:
+                conf_all = []
+                for c, k in confidence_list:
                     bbox = []
                     frm_dct = obj_dict[k]
                     for f in frms_ixs_for_ev:
@@ -349,11 +351,13 @@ class VsituDS(Dataset):
                             bbox.append([floor(x0/1280*7), floor(y0/720*7), floor(x1/1280*7)+1, floor(y1/720*7)+1])
 
                     bbox_all.append(bbox)
+                    conf_all.append(c)
 
                 if len(bbox_all) < 8:
                     rem = 8 - len(bbox_all)
                     n_frms = len(frms_ixs_for_ev)
                     bbox_all += [[[0, 0, 0, 0] for _ in range(n_frms)] for i in range(rem)]
+                    conf_all += [0.0 for i in range(rem)]
                 bbox_fast = torch.tensor(bbox_all[:8])
                 bbox_slow = torch.index_select(
                     bbox_fast,
@@ -362,12 +366,15 @@ class VsituDS(Dataset):
                         0, bbox_fast.shape[1]-1, bbox_fast.shape[1] // self.sf_cfg.SLOWFAST.ALPHA
                     ).long()
                 )
+                bbox_conf = torch.tensor(conf_all[:8])
                 obj_bbox_fast.append(bbox_fast)
                 obj_bbox_slow.append(bbox_slow)
+                obj_conf.append(bbox_conf)
 
             obj_bbox = {
                 "obj_bbox_fast": torch.stack(obj_bbox_fast),
                 "obj_bbox_slow": torch.stack(obj_bbox_slow),
+                "obj_conf": torch.stack(obj_conf)
             }
             torch.save(obj_bbox, file_name)
 
