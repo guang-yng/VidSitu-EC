@@ -287,12 +287,13 @@ class SFBaseEC(SFBase):
             obj_feat[-1] = torch.stack(obj_feat[-1])
         
         obj_feat_fast = torch.stack(obj_feat)
-        obj_feat = self.vfeat_head(torch.cat([obj_feat_slow, obj_feat_fast], dim=3))
+        obj_feat_org = torch.cat([obj_feat_slow, obj_feat_fast], dim=3)
+        obj_feat = self.vfeat_head(obj_feat_org)
 
-        return feat_out, obj_feat
+        return feat_out, obj_feat, obj_feat_org
 
     def forward(self, inp: Dict):
-        feat_out, obj_feat = self.forward_encoder(inp)
+        feat_out, obj_feat, _ = self.forward_encoder(inp)
         mdl_out = self.forward_decoder(feat_out, inp)
 
         return {"mdl_out": mdl_out, "obj_feat": obj_feat}
@@ -358,13 +359,47 @@ class LossEC_WPG(nn.Module):
         loss_2 = self.c(logits.T, labels)
         loss_ec = (loss_1+loss_2)/2
 
+        print(loss_wpg, loss_v, loss_ec)
+
         return {"loss": (loss_wpg+loss_v+loss_ec)/3}
 
 
+class LossEC(nn.Module):
+    def __init__(self, cfg, comm):
+        super().__init__()
+        self.loss_verb = LossB(cfg, comm)
+        self.c = nn.CrossEntropyLoss()
+        self.t = 20
+        self.loss_keys = ["loss"]
+
+    def forward(self, mdl_out, inp):
+        loss_v = self.loss_verb(mdl_out, inp)['loss']
+
+        # obj_feat: B x 5 x 8 x 768
+        # txt_feat: B x 5 x 4 x 768
+        obj_feat = mdl_out['obj_feat'][:, :, :3, ]
+        txt_feat = inp['text_feature']
+
+        # ve_feat: B x 5 x 768
+        # txt_feat: B x 5 x 768
+        ve_feat = F.normalize(obj_feat.sum(dim=2), dim=2).view(-1, 768)
+        te_feat = F.normalize(txt_feat[:, :, 0, :] + txt_feat[:, :, 2:, :].sum(dim=2), dim=2).view(-1, 768)
+
+        B = len(obj_feat)
+        logits = ve_feat @ te_feat.T * self.t
+        labels = torch.arange(B*5, device="cuda")
+        loss_1 = self.c(logits, labels)
+        loss_2 = self.c(logits.T, labels)
+        loss_ec = (loss_1+loss_2)/2
+
+        return {"loss": 0.5*loss_v+0.5*loss_ec}
+
+    
 class SFBaseECCat(SFBaseEC):
     def __init__(self, cfg, comm):
         super(SFBaseECCat, self).__init__(cfg, comm)
-        self.trans = nn.TransformerEncoderLayer(d_model=768, nhead=12)
+        # self.cls = nn.parameter.Parameter(data=torch.zeros(768), requires_grad=True)
+        self.trans = nn.TransformerEncoderLayer(d_model=768, nhead=6)
 
     def build_projection_head(self, cfg, out_dim=None):
         if out_dim is None:
@@ -385,7 +420,7 @@ class SFBaseECCat(SFBaseEC):
 
         head_out = head_out.view(B*5, -1, 768)
         obj_feat = obj_feat.view(B*5, -1, 768)
-        inp = torch.cat([head_out, obj_feat], dim=1)
+        inp = torch.cat([head_out, obj_feat[:, :, ]], dim=1)
         out = self.trans(inp)
         out = out[:, :3, ].flatten(start_dim=1)
 
@@ -395,7 +430,48 @@ class SFBaseECCat(SFBaseEC):
         return out
 
     def forward(self, inp: Dict):
-        feat_out, obj_feat = self.forward_encoder(inp)
+        feat_out, obj_feat, _ = self.forward_encoder(inp)
+        mdl_out = self.forward_decoder(feat_out, obj_feat, inp)
+
+        return {"mdl_out": mdl_out, "obj_feat": obj_feat}
+
+
+class SFBaseECCatAtten(SFBaseEC):
+    def __init__(self, cfg, comm):
+        super(SFBaseECCatAtten, self).__init__(cfg, comm)
+        self.atten_w = nn.Linear(768, 2304, bias=False)
+
+    def build_projection_head(self, cfg, out_dim=None):
+        if out_dim is None:
+            out_dim = len(self.comm.vb_id_vocab)
+        din = sum(self.head.dim_in)
+        self.proj_head = nn.Sequential(
+            *[nn.Linear(din+768, din // 2), nn.ReLU(), nn.Linear(din // 2, out_dim)]
+        )
+
+    def forward_decoder(self, enc_out, obj_feat, inp):
+        # enc_out: List
+        # len(enc_out) = nfeats_used
+        # enc_out[0]: B x C x T x H x W
+        B = len(inp["vseg_idx"])
+        head_out = self.head(enc_out)
+        # (B, C, T, H, W) -> (B, T, H, W, C).
+        head_out = head_out.permute((0, 2, 3, 4, 1))
+
+        head_out = head_out.view(B*5, 1, 2304)
+        atten_score = torch.bmm(head_out, self.atten_w(obj_feat.view(B*5, -1, 768)).permute(0, 2, 1))
+        atten_score = F.softmax(atten_score, dim=-1)
+        out_obj = torch.bmm(atten_score, obj_feat.view(B*5, -1, 768)).squeeze()
+
+        out = torch.cat([head_out.squeeze(), out_obj], dim=1)
+
+        proj_out = self.proj_head(out)
+        out = proj_out.view(B, 5, -1)
+        assert out.size(-1) == len(self.comm.vb_id_vocab)
+        return out
+
+    def forward(self, inp: Dict):
+        feat_out, obj_feat, _ = self.forward_encoder(inp)
         mdl_out = self.forward_decoder(feat_out, obj_feat, inp)
 
         return {"mdl_out": mdl_out, "obj_feat": obj_feat}

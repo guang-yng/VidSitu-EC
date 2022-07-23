@@ -625,6 +625,7 @@ class Learner:
             del out_loss
             del loss
             del batch
+            torch.cuda.empty_cache()
         self.optimizer.zero_grad()
         out_loss = reduce_dict(trn_loss.smooth, average=True)
         if self.trn_met:
