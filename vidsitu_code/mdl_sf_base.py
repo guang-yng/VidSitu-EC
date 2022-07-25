@@ -15,6 +15,7 @@ from utils.transformer_code import Transformer as TxCodeEnc
 from vidsitu_code.seq_gen import SeqGenCustom, EncoderOut
 from transformers import GPT2LMHeadModel
 from vidsitu_code.hf_gpt2_fseq import HuggingFaceGPT2Decoder
+import time
 
 
 class SlowFast_FeatModel(SlowFast):
@@ -121,6 +122,18 @@ class SFBase(nn.Module):
         self.cfg = cfg.mdl
         self.comm = comm
         self.build_model()
+
+    def train(self, mode=True):
+        super(SFBase, self).train(mode)
+        count = 0
+        print("Freezing BatchNorm3D except the first one.")
+        for p, m in self.sf_mdl.named_modules():
+            if isinstance(m, nn.BatchNorm3d):
+                count += 1
+                if count >= 3:
+                    m.eval()
+                    m.weight.requires_grad = False
+                    m.bias.requires_gard = False
 
     def build_model(self):
         self.build_sf_model(self.sf_cfg)
@@ -313,7 +326,7 @@ class LossEC_WPG(nn.Module):
 
         # obj_feat: B x 5 x 8 x 768
         # txt_feat: B x 5 x 4 x 768
-        obj_feat = mdl_out['obj_feat']
+        obj_feat = F.normalize(mdl_out['obj_feat'], dim=3)
         txt_feat = F.normalize(inp['text_feature'], dim=3)
 
         B = len(txt_feat)
@@ -359,7 +372,6 @@ class LossEC_WPG(nn.Module):
         loss_2 = self.c(logits.T, labels)
         loss_ec = (loss_1+loss_2)/2
 
-        print(loss_wpg, loss_v, loss_ec)
 
         return {"loss": (loss_wpg+loss_v+loss_ec)/3}
 
@@ -399,7 +411,7 @@ class SFBaseECCat(SFBaseEC):
     def __init__(self, cfg, comm):
         super(SFBaseECCat, self).__init__(cfg, comm)
         # self.cls = nn.parameter.Parameter(data=torch.zeros(768), requires_grad=True)
-        self.trans = nn.TransformerEncoderLayer(d_model=768, nhead=6)
+        self.trans = nn.TransformerEncoderLayer(d_model=768, nhead=8)
 
     def build_projection_head(self, cfg, out_dim=None):
         if out_dim is None:

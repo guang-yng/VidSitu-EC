@@ -29,7 +29,7 @@ def launch_job(cfg, init_method, func, daemon=False):
         daemon (bool): The spawned processes’ daemon flag. If set to True,
             daemonic processes will be created
     """
-    if cfg.num_gpus > 1:
+    if cfg.num_gpus > 1 and cfg.do_dist:
         assert cfg.do_dist
         torch.multiprocessing.spawn(
             run_job,
@@ -38,5 +38,4 @@ def launch_job(cfg, init_method, func, daemon=False):
             daemon=daemon,
         )
     else:
-        assert not cfg.do_dist
         func(cfg=cfg)

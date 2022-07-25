@@ -9,6 +9,7 @@ from functools import partial
 import sys
 from yacs.config import CfgNode as CN
 import os
+import time
 
 os.environ["PYTHONWARNINGS"] = "ignore"
 
@@ -71,14 +72,21 @@ def learner_init(uid: str, cfg: CN) -> Learner:
         cur_device = torch.cuda.current_device()
         mdl = mdl.to(device=cur_device)
         if cfg.num_gpus > 1:
-            assert cfg.do_dist
-            mdl = torch.nn.parallel.DistributedDataParallel(
-                module=mdl,
-                device_ids=[cur_device],
-                output_device=cur_device,
-                broadcast_buffers=True,
-                find_unused_parameters=True,
-            )
+            if cfg.do_dist:
+                mdl = torch.nn.parallel.DistributedDataParallel(
+                    module=mdl,
+                    device_ids=[cur_device],
+                    output_device=cur_device,
+                    broadcast_buffers=True,
+                    find_unused_parameters=True,
+                )
+            else:
+                mdl = torch.nn.DataParallel(
+                    module=mdl,
+                    device_ids=range(cfg.num_gpus),
+                    output_device=cur_device,
+                )
+
 
     learn = Learner(
         uid=uid,
@@ -149,12 +157,12 @@ def main_dist(uid: str, **kwargs):
     argv = sys.argv
     cfg.cmd = argv
     cfg.cmd_str = " ".join(argv)
-    if num_gpus > 1:
-        # We are doing distributed parallel
-        cfg.do_dist = True
-    else:
-        # We are doing data parallel
-        cfg.do_dist = False
+    # if num_gpus > 1:
+    #     # We are doing distributed parallel
+    #     cfg.do_dist = True
+    # else:
+    #     # We are doing data parallel
+    #     cfg.do_dist = False
     # Update the config file depending on the command line args
     key_maps = CFP.get_key_maps()
     cfg = CFP.pre_proc_config(cfg, kwargs)

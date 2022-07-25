@@ -312,6 +312,24 @@ class MLFlowTracker:
         mlflow.end_run()
 
 
+def gather_dict(tensor_dict):
+    output_dict = {}
+    world_size = get_world_size()
+    for key, tensor in tensor_dict.items():
+        if key in ['mdl_out', 'obj_feat', 'text_feature', 'label_tensor']:
+            tensor_placeholder = [
+                torch.ones_like(tensor) for _ in range(world_size)
+            ]
+            dist.all_gather(tensor_placeholder, tensor, async_op=False)
+            tensor_placeholder[get_rank()] = tensor
+            output_dict[key] = tensor_placeholder
+    for key, gathered_tensor in output_dict.items():
+        output_dict[key] = torch.cat(gathered_tensor, dim=0)
+
+    return output_dict
+    
+
+
 @dataclass
 class Learner:
     uid: str
@@ -597,9 +615,11 @@ class Learner:
             self.num_it += 1
             batch = move_to(batch, self.device)
             out = self.mdl(batch)
+            out = gather_dict(out)
+            batch = gather_dict(batch)
             out_loss = self.loss_fn(out, batch)
             loss = out_loss[self.loss_keys[0]]
-            loss = loss.mean() / self.grad_acc
+            loss = loss.mean() / self.grad_acc / 4
             if torch.isnan(loss).any():
                 print("Pain In", batch["vseg_idx"])
             loss.backward()
@@ -624,8 +644,7 @@ class Learner:
                 self.mlf_logger.log_loss_batch(trn_loss, self.num_it)
             del out_loss
             del loss
-            del batch
-            torch.cuda.empty_cache()
+
         self.optimizer.zero_grad()
         out_loss = reduce_dict(trn_loss.smooth, average=True)
         if self.trn_met:
@@ -859,6 +878,8 @@ class Learner:
         except (Exception, KeyboardInterrupt, RuntimeError) as e:
             exception = e
             self.mlf_logger.end_run()
+            if self.cfg.do_dist:
+                dist.destroy_process_group()
             raise e
         finally:
             if is_main_process():
@@ -897,7 +918,15 @@ class Learner:
     def prepare_optimizer(self, params=None):
         "Prepare a normal optimizer"
         if not params:
-            params = self.mdl.parameters()
+            params = [
+                {'params':[], 'lr': self.lr/10}, 
+                {'params':[]}
+            ]
+            for n, p in self.mdl.named_parameters():
+                if "sf_mdl" in n:
+                    params[0]['params'].append(p)
+                else:
+                    params[1]['params'].append(p)
         opt = self.opt_fn(params, lr=self.lr)
         return opt
 
