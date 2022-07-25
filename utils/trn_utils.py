@@ -615,8 +615,10 @@ class Learner:
             self.num_it += 1
             batch = move_to(batch, self.device)
             out = self.mdl(batch)
-            out = gather_dict(out)
-            batch = gather_dict(batch)
+            if cfg.do_dist:
+                out = gather_dict(out)
+                batch = gather_dict(batch)
+
             out_loss = self.loss_fn(out, batch)
             loss = out_loss[self.loss_keys[0]]
             loss = loss.mean() / self.grad_acc / 4
