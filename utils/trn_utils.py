@@ -615,7 +615,7 @@ class Learner:
             self.num_it += 1
             batch = move_to(batch, self.device)
             out = self.mdl(batch)
-            if cfg.do_dist:
+            if self.cfg.do_dist:
                 out = gather_dict(out)
                 batch = gather_dict(batch)
 
