@@ -26,7 +26,7 @@ Please refer to [Miniconda](https://docs.conda.io/en/latest/miniconda.html) for 
 
     + Install Detectron2 (needed for SlowFast). If you have CUDA 10.2 and Pytorch 1.5 you can use:
     ```
-    python -m pip install detectron2 -f \
+    python -m pip install detectron2==0.3 -f \
     https://dl.fbaipublicfiles.com/detectron2/wheels/cu102/torch1.5/index.html
     ```
     Please refer to [detectron2](https://github.com/facebookresearch/detectron2/blob/master/INSTALL.md) repository for more details.
