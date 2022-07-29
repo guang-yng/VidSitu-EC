@@ -13,6 +13,7 @@ coval/*
 fairseq/*
 coco-caption/
 
+tmp
 weights
 run*.sh
 feat_extract*.sh
