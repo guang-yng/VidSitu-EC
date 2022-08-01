@@ -36,7 +36,7 @@ def get_mdl_loss_eval(cfg):
         elif cfg.mdl.mdl_name == "sf_ec":
             return {"mdl": SFBaseEC, "loss": LossEC_WPG, "evl": EvalB}
         elif cfg.mdl.mdl_name == "sf_ec_cat":
-            return {"mdl": SFBaseECCat, "loss": LossEC_WPG, "evl": EvalB}
+            return {"mdl": SFBaseECCat, "loss": LossB, "evl": EvalB}
         elif cfg.mdl.mdl_name == "sf_ec_cat_atten":
             return {"mdl": SFBaseECCatAtten, "loss": LossEC_WPG, "evl": EvalB}
         else:

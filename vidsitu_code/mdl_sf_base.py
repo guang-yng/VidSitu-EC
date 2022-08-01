@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from abc import ABC
 
 from typing import Dict, Optional
 from utils.misc_utils import combine_first_ax
@@ -243,12 +244,78 @@ class LossB(nn.Module):
         loss = F.cross_entropy(mdl_preds_c1, labels_c1)
         return {"loss": loss}
 
+    
+class PPState(nn.Module):
+    def __init__(self, shape):
+        super(PPState, self).__init__()
+        self.shape = shape
+        self.pos = nn.Linear(4, 128, bias=False)
+
+    def forward(self, frames, bbox):
+        assert isinstance(frames, torch.Tensor)
+        assert frames.shape[1:] == self.shape
+        shape = frames.shape
+        # B x E x T x state_dim
+        states = torch.ones(shape[0], shape[1], shape[3], shape[2]+128, device="cuda")
+        for i in range(shape[0]):
+            for j in range(shape[1]):
+                for t in range(shape[3]):
+                    obj = bbox[i, j, t]
+                    if obj[0] == obj[2] and obj[1] == obj[3]:
+                        pixel_feat = torch.zeros(shape[2], device="cuda")
+                    else:
+                        pixel_feat = frames[i, j, :, t, obj[0]:obj[2], obj[1]:obj[3]].mean(dim=(1, 2))
+                    states[i, j, t] = torch.cat([pixel_feat, self.pos(obj.float())])
+        
+        return states
+                    
+
+class StateAgg(nn.Module, ABC):
+    def __init__(self, shape):
+        super(StateAgg, self).__init__()
+        self.shape = shape
+
+    def forward(self, frames, bbox):
+        assert isinstance(frames, torch.Tensor)
+        assert frames.shape[1:] == self.shape
+        vn = frames.shape[0]*frames.shape[1]
+        out = []
+        for i in range(bbox.shape[2]):
+            states = self.state_creator(frames, bbox[:, :, i])
+            out.append(self.seq_mdl(states.view(vn, frames.shape[3], -1)))
+        out = torch.stack(out)
+        return out.permute((1, 0, 2))
+
+
+class LSTMAgg(StateAgg):
+    def __init__(self, shape):
+        super(LSTMAgg, self).__init__(shape)
+        self.state_creator = PPState(shape)
+        self.mdl = nn.LSTM(input_size=shape[1]+128, hidden_size=768, num_layers=2, batch_first=True)
+        self.proj = nn.Linear(768, shape[1]+128, bias=False)
+        self.avg = nn.AdaptiveAvgPool1d(1)
+
+    def seq_mdl(self, states):
+        return self.avg(self.proj(self.mdl(states)[0]).permute((0, 2, 1))).squeeze()
+
+
+class AvgAgg(StateAgg):
+    def __init__(self, shape):
+        super(AvgAgg, self).__init__(shape)
+        self.state_creator = PPState(shape)
+        self.avg_mdl = nn.AdaptiveAvgPool1d(1)
+
+    def seq_mdl(self, states):
+        return self.avg_mdl(states.permute(0, 2, 1)).squeeze()
+
 
 class SFBaseEC(SFBase):
     def __init__(self, cfg, comm):
         super(SFBaseEC, self).__init__(cfg, comm)
-        din = sum(self.head.dim_in)
+        din = sum(self.head.dim_in)+256
         self.vfeat_head = nn.Linear(din, 768)
+        self.slow_agg = LSTMAgg((5, 2048, 8, 7, 7))
+        self.fast_agg = LSTMAgg((5, 256, 32, 7, 7))
 
     def forward_encoder(self, inp):
         feats_used = self.get_feats(inp)
@@ -259,47 +326,12 @@ class SFBaseEC(SFBase):
         bbox = inp['obj_bbox_slow']
         B = len(bbox)
         frm_feat = feat_out[0].view(B, 5, 2048, 8, 7, 7)
-
-        obj_feat = []
-        for i in range(B):
-            obj_feat.append([])
-            for ev in range(5):
-                obj_feat[-1].append([])
-                for obj in bbox[i][ev]:
-                    feat_obj = []
-                    for t in range(8):
-                        if obj[t][0] == obj[t][2] or obj[t][1] == obj[t][3]:
-                            feat = torch.zeros((2048), device="cuda")
-                        else:
-                            feat = frm_feat[i, ev, :, t, obj[t][0]:obj[t][2], obj[t][1]:obj[t][3]].mean(dim=(1, 2))
-                        feat_obj.append(feat.view(2048))
-                    obj_feat[-1][-1].append(torch.stack(feat_obj).mean(dim=0))
-                obj_feat[-1][-1] = F.normalize(torch.stack(obj_feat[-1][-1]))
-            obj_feat[-1] = torch.stack(obj_feat[-1])
-        
-        obj_feat_slow = torch.stack(obj_feat)
+        obj_feat_slow = self.slow_agg(frm_feat, bbox).view(B, 5, -1, 2048+128)
 
         bbox = inp['obj_bbox_fast']
         frm_feat = feat_out[1].view(B, 5, 256, 32, 7, 7)
+        obj_feat_fast = self.fast_agg(frm_feat, bbox).view(B, 5, -1, 256+128)
 
-        obj_feat = []
-        for i in range(B):
-            obj_feat.append([])
-            for ev in range(5):
-                obj_feat[-1].append([])
-                for obj in bbox[i][ev]:
-                    feat_obj = []
-                    for t in range(32):
-                        if obj[t][0] == obj[t][2] or obj[t][1] == obj[t][3]:
-                            feat = torch.zeros((256), device="cuda")
-                        else:
-                            feat = frm_feat[i, ev, :, t, obj[t][0]:obj[t][2], obj[t][1]:obj[t][3]].mean(dim=(1, 2))
-                        feat_obj.append(feat.view(256))
-                    obj_feat[-1][-1].append(torch.stack(feat_obj).mean(dim=0))
-                obj_feat[-1][-1] = F.normalize(torch.stack(obj_feat[-1][-1]))
-            obj_feat[-1] = torch.stack(obj_feat[-1])
-        
-        obj_feat_fast = torch.stack(obj_feat)
         obj_feat_org = torch.cat([obj_feat_slow, obj_feat_fast], dim=3)
         obj_feat = self.vfeat_head(obj_feat_org)
 
@@ -310,6 +342,74 @@ class SFBaseEC(SFBase):
         mdl_out = self.forward_decoder(feat_out, inp)
 
         return {"mdl_out": mdl_out, "obj_feat": obj_feat}
+
+
+# class SFBaseEC(SFBase):
+#     def __init__(self, cfg, comm):
+#         super(SFBaseEC, self).__init__(cfg, comm)
+#         din = sum(self.head.dim_in)
+#         self.vfeat_head = nn.Linear(din, 768)
+# 
+#     def forward_encoder(self, inp):
+#         feats_used = self.get_feats(inp)
+#         nfeats_used = len(feats_used)
+#         feat_out = self.sf_mdl.forward_features(feats_used)
+#         assert len(feat_out) == nfeats_used
+# 
+#         bbox = inp['obj_bbox_slow']
+#         B = len(bbox)
+#         frm_feat = feat_out[0].view(B, 5, 2048, 8, 7, 7)
+# 
+#         obj_feat = []
+#         for i in range(B):
+#             obj_feat.append([])
+#             for ev in range(5):
+#                 obj_feat[-1].append([])
+#                 for obj in bbox[i][ev]:
+#                     feat_obj = []
+#                     for t in range(8):
+#                         if obj[t][0] == obj[t][2] or obj[t][1] == obj[t][3]:
+#                             feat = torch.zeros((2048), device="cuda")
+#                         else:
+#                             feat = frm_feat[i, ev, :, t, obj[t][0]:obj[t][2], obj[t][1]:obj[t][3]].mean(dim=(1, 2))
+#                         feat_obj.append(feat.view(2048))
+#                     obj_feat[-1][-1].append(torch.stack(feat_obj).mean(dim=0))
+#                 obj_feat[-1][-1] = F.normalize(torch.stack(obj_feat[-1][-1]))
+#             obj_feat[-1] = torch.stack(obj_feat[-1])
+#         
+#         obj_feat_slow = torch.stack(obj_feat)
+# 
+#         bbox = inp['obj_bbox_fast']
+#         frm_feat = feat_out[1].view(B, 5, 256, 32, 7, 7)
+# 
+#         obj_feat = []
+#         for i in range(B):
+#             obj_feat.append([])
+#             for ev in range(5):
+#                 obj_feat[-1].append([])
+#                 for obj in bbox[i][ev]:
+#                     feat_obj = []
+#                     for t in range(32):
+#                         if obj[t][0] == obj[t][2] or obj[t][1] == obj[t][3]:
+#                             feat = torch.zeros((256), device="cuda")
+#                         else:
+#                             feat = frm_feat[i, ev, :, t, obj[t][0]:obj[t][2], obj[t][1]:obj[t][3]].mean(dim=(1, 2))
+#                         feat_obj.append(feat.view(256))
+#                     obj_feat[-1][-1].append(torch.stack(feat_obj).mean(dim=0))
+#                 obj_feat[-1][-1] = F.normalize(torch.stack(obj_feat[-1][-1]))
+#             obj_feat[-1] = torch.stack(obj_feat[-1])
+#         
+#         obj_feat_fast = torch.stack(obj_feat)
+#         obj_feat_org = torch.cat([obj_feat_slow, obj_feat_fast], dim=3)
+#         obj_feat = self.vfeat_head(obj_feat_org)
+# 
+#         return feat_out, obj_feat, obj_feat_org
+# 
+#     def forward(self, inp: Dict):
+#         feat_out, obj_feat, _ = self.forward_encoder(inp)
+#         mdl_out = self.forward_decoder(feat_out, inp)
+# 
+#         return {"mdl_out": mdl_out, "obj_feat": obj_feat}
 
 
 class LossEC_WPG(nn.Module):
@@ -373,7 +473,7 @@ class LossEC_WPG(nn.Module):
         loss_ec = (loss_1+loss_2)/2
 
 
-        return {"loss": (loss_wpg+loss_v+loss_ec)/3}
+        return {"loss": loss_wpg*0.3+loss_v*0.2+loss_ec*0.5}
 
 
 class LossEC(nn.Module):
