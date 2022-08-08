@@ -86,7 +86,7 @@ class VsituDS(Dataset):
         self.comm.need_text_feats = False
         if self.full_cfg.task_type == "vb":
             if "ec" in self.full_cfg.mdl.mdl_name:
-                self.comm.need_text_feats = True
+                # self.comm.need_text_feats = True
                 self.comm.need_objs = True
 
         self.comm.vb_id_vocab = read_file_with_assertion(
@@ -310,6 +310,8 @@ class VsituDS(Dataset):
             obj_bbox_fast = []
             obj_bbox_slow = []
             obj_conf = []
+            obj_bbox_union_fast = []
+            obj_bbox_union_slow = []
             for ev in range(1, 6):
                 ev_id = f"Ev{ev}"
                 center_ix = self.comm.cent_frm_per_ev[ev_id]
@@ -366,15 +368,46 @@ class VsituDS(Dataset):
                         0, bbox_fast.shape[1]-1, bbox_fast.shape[1] // self.sf_cfg.SLOWFAST.ALPHA
                     ).long()
                 )
+
+                bbox_fast_union = []
+                for t in range(bbox_fast.shape[1]):
+                    union_box = [8, 8, -1, -1]
+                    for o_id in range(bbox_fast.shape[0]):
+                        bb = bbox_fast[o_id, t]
+                        if bb[0] == bb[2] and bb[1] == bb[3]:
+                            continue
+                        union_box[0] = min(union_box[0], bb[0].item())
+                        union_box[1] = min(union_box[1], bb[1].item())
+                        union_box[2] = max(union_box[2], bb[2].item())
+                        union_box[3] = max(union_box[3], bb[3].item())
+                    bbox_fast_union.append(union_box)
+
+                bbox_slow_union = []
+                for t in range(bbox_slow.shape[1]):
+                    union_box = [8, 8, -1, -1]
+                    for o_id in range(bbox_slow.shape[0]):
+                        bb = bbox_slow[o_id, t]
+                        if bb[0] == bb[2] and bb[1] == bb[3]:
+                            continue
+                        union_box[0] = min(union_box[0], bb[0].item())
+                        union_box[1] = min(union_box[1], bb[1].item())
+                        union_box[2] = max(union_box[2], bb[2].item())
+                        union_box[3] = max(union_box[3], bb[3].item())
+                    bbox_slow_union.append(union_box)
+
                 bbox_conf = torch.tensor(conf_all[:8])
                 obj_bbox_fast.append(bbox_fast)
                 obj_bbox_slow.append(bbox_slow)
                 obj_conf.append(bbox_conf)
+                obj_bbox_union_fast.append(torch.tensor(bbox_fast_union))
+                obj_bbox_union_slow.append(torch.tensor(bbox_slow_union))
 
             obj_bbox = {
                 "obj_bbox_fast": torch.stack(obj_bbox_fast),
                 "obj_bbox_slow": torch.stack(obj_bbox_slow),
-                "obj_conf": torch.stack(obj_conf)
+                "obj_conf": torch.stack(obj_conf),
+                "obj_bbox_union_fast": torch.stack(obj_bbox_union_fast),
+                "obj_bbox_union_slow": torch.stack(obj_bbox_union_slow),
             }
             torch.save(obj_bbox, file_name)
 

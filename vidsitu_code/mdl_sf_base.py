@@ -261,7 +261,7 @@ class PPState(nn.Module):
             for j in range(shape[1]):
                 for t in range(shape[3]):
                     obj = bbox[i, j, t]
-                    if obj[0] == obj[2] and obj[1] == obj[3]:
+                    if obj[0] >= obj[2] and obj[1] >= obj[3]:
                         pixel_feat = torch.zeros(shape[2], device="cuda")
                     else:
                         pixel_feat = frames[i, j, :, t, obj[0]:obj[2], obj[1]:obj[3]].mean(dim=(1, 2))
@@ -291,12 +291,12 @@ class LSTMAgg(StateAgg):
     def __init__(self, shape):
         super(LSTMAgg, self).__init__(shape)
         self.state_creator = PPState(shape)
-        self.mdl = nn.LSTM(input_size=shape[1]+128, hidden_size=768, num_layers=2, batch_first=True)
-        self.proj = nn.Linear(768, shape[1]+128, bias=False)
+        self.mdl = nn.LSTM(input_size=shape[1]+64, hidden_size=384, num_layers=2, batch_first=True)
+        # self.proj = nn.Linear(768, shape[1]+128, bias=False)
         self.avg = nn.AdaptiveAvgPool1d(1)
 
     def seq_mdl(self, states):
-        return self.avg(self.proj(self.mdl(states)[0]).permute((0, 2, 1))).squeeze()
+        return self.avg(self.mdl(states)[0].permute((0, 2, 1))).squeeze()
 
 
 class AvgAgg(StateAgg):
@@ -314,8 +314,8 @@ class SFBaseEC(SFBase):
         super(SFBaseEC, self).__init__(cfg, comm)
         din = sum(self.head.dim_in)+256
         self.vfeat_head = nn.Linear(din, 768)
-        self.slow_agg = LSTMAgg((5, 2048, 8, 7, 7))
-        self.fast_agg = LSTMAgg((5, 256, 32, 7, 7))
+        self.slow_agg = AvgAgg((5, 2048, 8, 7, 7))
+        self.fast_agg = AvgAgg((5, 256, 32, 7, 7))
 
     def forward_encoder(self, inp):
         feats_used = self.get_feats(inp)
@@ -546,6 +546,108 @@ class SFBaseECCat(SFBaseEC):
         mdl_out = self.forward_decoder(feat_out, obj_feat, inp)
 
         return {"mdl_out": mdl_out, "obj_feat": obj_feat}
+
+
+class SFBaseRel(SFBaseECCat):
+    """
+    SFBaseRel(SFBaseECCat):
+        SFBase model with object bounding box union replacing
+        the 'all' feature.
+    """
+    def __init__(self, cfg, comm):
+        super(SFBaseRel, self).__init__(cfg, comm)
+
+    def union_box(self, bbox, union):
+        # rel = torch.zeros((bbox.shape[0], bbox.shape[1], 1, bbox.shape[3], 4), device="cuda", dtype=torch.int64)
+        # for i in range(bbox.shape[0]):
+        #     for j in range(bbox.shape[1]):
+        #         for t in range(bbox.shape[3]):
+        #             union_box = [8, 8, -1, -1]
+        #             for o_id in range(bbox.shape[2]):
+        #                 bb = bbox[i, j, o_id, t]
+        #                 if bb[0] == bb[2] and bb[1] == bb[3]:
+        #                     continue
+        #                 union_box[0] = min(union_box[0], bb[0].item())
+        #                 union_box[1] = min(union_box[1], bb[1].item())
+        #                 union_box[2] = max(union_box[2], bb[2].item())
+        #                 union_box[3] = max(union_box[3], bb[3].item())
+        #             rel[i, j, 0, t] = torch.tensor(union_box, device="cuda", dtype=torch.int64)
+        union = union.view(bbox.shape[0], bbox.shape[1], 1, bbox.shape[3], 4)
+        return torch.cat([bbox[:, :, :], union], dim=2)
+
+    def forward(self, inp: Dict):
+        inp['obj_bbox_slow'] = self.union_box(inp['obj_bbox_slow'], inp['obj_bbox_union_slow'])
+        inp['obj_bbox_fast'] = self.union_box(inp['obj_bbox_fast'], inp['obj_bbox_union_fast'])
+        feat_out, obj_feat, _ = self.forward_encoder(inp)
+        mdl_out = self.forward_decoder(feat_out, obj_feat, inp)
+
+        return {"mdl_out": mdl_out, "obj_feat": obj_feat}
+                    
+
+
+# class SFBaseRel(SFBaseECCat):
+#     """
+#     SFBaseRel(SFBaseECCat):
+#         SFBase model with object bounding box union replacing
+#         the 'all' feature.
+#     """
+#     def __init__(self, cfg, comm):
+#         super(SFBaseRel, self).__init__(cfg, comm)
+# 
+#     def forward(self, inp: Dict):
+#         feat_out, obj_feat, _ = self.forward_encoder(inp)
+#         all_feat = [feat_out[0].clone(), feat_out[1].clone()]
+#         bbox = inp['obj_bbox_slow']
+#         B = len(bbox)
+#         mask = torch.zeros((B, 5, 2048, 8, 7, 7), device="cuda")
+#         for i in range(B):
+#             for ev in range(5):
+#                 for t in range(bbox.shape[3]):
+#                     bb = [7, 7, -1, -1]
+#                     for o_id in range(bbox.shape[2]):
+#                         bt = bbox[i, ev, o_id, t]
+#                         if bt[0] == bt[2] and bt[1] == bt[3]:
+#                             continue
+#                         bb[0] = min(bb[0], bt[0])
+#                         bb[1] = min(bb[1], bt[1])
+#                         bb[2] = max(bb[2], bt[2])
+#                         bb[3] = max(bb[3], bt[3])
+#                     if bb == [7, 7, -1, -1]:
+#                         continue
+# 
+#                     for x in range(bb[0], bb[2]):
+#                         for y in range(bb[1], bb[3]):
+#                             mask[i, ev, :, t, x, y] = 1
+# 
+#         all_feat[0] *= mask.view(B*5, 2048, 8, 7, 7)
+# 
+#         bbox = inp['obj_bbox_fast']
+#         B = len(bbox)
+#         mask = torch.zeros((B, 5, 256, 32, 7, 7), device="cuda")
+#         for i in range(B):
+#             for ev in range(5):
+#                 for t in range(bbox.shape[3]):
+#                     bb = [7, 7, -1, -1]
+#                     for o_id in range(bbox.shape[2]):
+#                         bt = bbox[i, ev, o_id, t]
+#                         if bt[0] == bt[2] and bt[1] == bt[3]:
+#                             continue
+#                         bb[0] = min(bb[0], bt[0])
+#                         bb[1] = min(bb[1], bt[1])
+#                         bb[2] = max(bb[2], bt[2])
+#                         bb[3] = max(bb[3], bt[3])
+#                     if bb == [7, 7, -1, -1]:
+#                         continue
+# 
+#                     for x in range(bb[0], bb[2]):
+#                         for y in range(bb[1], bb[3]):
+#                             mask[i, ev, :, t, x, y] = 1
+# 
+#         all_feat[1] *= mask.view(B*5, 256, 32, 7, 7)
+#         mdl_out = self.forward_decoder(all_feat, obj_feat, inp)
+# 
+#         return {"mdl_out": mdl_out, "obj_feat": obj_feat}
+
 
 
 class SFBaseECCatAtten(SFBaseEC):

@@ -6,6 +6,7 @@ from vidsitu_code.mdl_sf_base import (
     LossEC_WPG,
     SFBaseECCat,
     SFBaseECCatAtten,
+    SFBaseRel,
     Simple_GPT2_New,
     LossLambda,
     Simple_TxDec,
@@ -37,6 +38,8 @@ def get_mdl_loss_eval(cfg):
             return {"mdl": SFBaseEC, "loss": LossEC_WPG, "evl": EvalB}
         elif cfg.mdl.mdl_name == "sf_ec_cat":
             return {"mdl": SFBaseECCat, "loss": LossB, "evl": EvalB}
+        elif cfg.mdl.mdl_name == "sf_ec_rel":
+            return {"mdl": SFBaseRel, "loss": LossB, "evl": EvalB}
         elif cfg.mdl.mdl_name == "sf_ec_cat_atten":
             return {"mdl": SFBaseECCatAtten, "loss": LossEC_WPG, "evl": EvalB}
         else:

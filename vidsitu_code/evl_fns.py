@@ -391,17 +391,19 @@ class EvlFn_Vb_Comp(EvlFn_Vb):
             assert len(hypos1) == len(ev_lst)
             assert len(gts1) == len(ev_lst)
             c = 0
+            ev = []
             for ev_i in ev_lst:
                 hy0 = hypos0[ev_i]
                 hy1 = hypos1[ev_i]
                 gt1 = gts1[ev_i]
-                corr_one0 = int(len(set(hy0[:3]).intersection(gt1)) > 0)
+                corr_one0 = int(len(set(hy0[:3]).intersection(gt1)) > 2)
                 corr_one1 = int(len(set(hy1[:3]).intersection(gt1)) > 0)
                 if corr_one0 > corr_one1:
+                    ev.append(ev_i)
                     c += 1
                 
-            if c == 4:
-                better_vid.append((vid_key, self.vseg_lst[vid_key], hypos0, hypos1, gts1))
+            if c >= 1:
+                better_vid.append((vid_key, self.vseg_lst[vid_key], ev, hypos0, hypos1, gts1))
 
         return better_vid
 
