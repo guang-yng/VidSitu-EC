@@ -125,12 +125,12 @@ class EvalB(nn.Module):
                     raise NotImplementedError
             else:
                 spl = "valid"
-            out_acc = self.evl_fn(fname, split_type=spl)
-            val_acc = {
-                k: torch.tensor(v).to(self.device)
-                for k, v in out_acc.items()
-                if k in self.met_keys
-            }
+                out_acc = self.evl_fn(fname, split_type=spl)
+                val_acc = {
+                    k: torch.tensor(v).to(self.device)
+                    for k, v in out_acc.items()
+                    if k in self.met_keys
+                }
         synchronize()
         if is_main_process():
             if self.compute_loss:

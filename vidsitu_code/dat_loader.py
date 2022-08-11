@@ -159,17 +159,18 @@ class VsituDS(Dataset):
         vinfo_files_cfg = self.cfg.vinfo_files_lb
 
         self.vseg_lst = read_file_with_assertion(split_files_cfg[split_type])
-        vseg_ann_lst = read_file_with_assertion(vsitu_ann_files_cfg[split_type])
+        if "test" not in split_type:
+            vseg_ann_lst = read_file_with_assertion(vsitu_ann_files_cfg[split_type])
 
-        vsitu_ann_dct = {}
-        for vseg_ann in vseg_ann_lst:
-            vseg = vseg_ann["Ev1"]["vid_seg_int"]
-            if vseg not in vsitu_ann_dct:
-                vsitu_ann_dct[vseg] = []
-            vsitu_ann_dct[vseg].append(vseg_ann)
-        self.vsitu_ann_dct = vsitu_ann_dct
+            vsitu_ann_dct = {}
+            for vseg_ann in vseg_ann_lst:
+                vseg = vseg_ann["Ev1"]["vid_seg_int"]
+                if vseg not in vsitu_ann_dct:
+                    vsitu_ann_dct[vseg] = []
+                vsitu_ann_dct[vseg].append(vseg_ann)
+            self.vsitu_ann_dct = vsitu_ann_dct
 
-        if "valid" in split_type or "test" in split_type:
+        if "valid" in split_type:
             vseg_info_lst = read_file_with_assertion(vinfo_files_cfg[split_type])
             vsitu_vinfo_dct = {}
             for vseg_info in vseg_info_lst:
@@ -785,8 +786,11 @@ class VsituDS(Dataset):
         frms_out_dct = self.get_frms_all(idx)
 
         frms_out_dct["vseg_idx"] = torch.tensor(idx)
-        label_out_dct = self.get_label_out_dct(idx)
-        out_dct = coalesce_dicts([frms_out_dct, label_out_dct])
+        if "test" not in self.split_type:
+            label_out_dct = self.get_label_out_dct(idx)
+            out_dct = coalesce_dicts([frms_out_dct, label_out_dct])
+        else:
+            out_dct = frms_out_dct
         return out_dct
 
     def vb_args_item_getter(self, idx: int):
