@@ -246,17 +246,19 @@ class LossB(nn.Module):
 
     
 class PPState(nn.Module):
-    def __init__(self, shape):
+    def __init__(self, shape, C):
         super(PPState, self).__init__()
         self.shape = shape
-        self.pos = nn.Linear(4, 128, bias=False)
+        self.C = C
+        if C > 0:
+            self.pos = nn.Linear(4, C, bias=False)
 
     def forward(self, frames, bbox):
         assert isinstance(frames, torch.Tensor)
         assert frames.shape[1:] == self.shape
         shape = frames.shape
         # B x E x T x state_dim
-        states = torch.ones(shape[0], shape[1], shape[3], shape[2]+128, device="cuda")
+        states = torch.ones(shape[0], shape[1], shape[3], shape[2]+self.C, device="cuda")
         for i in range(shape[0]):
             for j in range(shape[1]):
                 for t in range(shape[3]):
@@ -265,15 +267,19 @@ class PPState(nn.Module):
                         pixel_feat = torch.zeros(shape[2], device="cuda")
                     else:
                         pixel_feat = frames[i, j, :, t, obj[0]:obj[2], obj[1]:obj[3]].mean(dim=(1, 2))
-                    states[i, j, t] = torch.cat([pixel_feat, self.pos(obj.float())])
+                    if self.C == 0:
+                        states[i, j, t] = pixel_feat
+                    else:
+                        states[i, j, t] = torch.cat([pixel_feat, self.pos(obj.float())])
         
         return states
                     
 
 class StateAgg(nn.Module, ABC):
-    def __init__(self, shape):
+    def __init__(self, shape, C):
         super(StateAgg, self).__init__()
         self.shape = shape
+        self.C = C
 
     def forward(self, frames, bbox):
         assert isinstance(frames, torch.Tensor)
@@ -288,10 +294,10 @@ class StateAgg(nn.Module, ABC):
 
 
 class LSTMAgg(StateAgg):
-    def __init__(self, shape):
-        super(LSTMAgg, self).__init__(shape)
-        self.state_creator = PPState(shape)
-        self.mdl = nn.LSTM(input_size=shape[1]+64, hidden_size=384, num_layers=2, batch_first=True)
+    def __init__(self, shape, C):
+        super(LSTMAgg, self).__init__(shape, C)
+        self.state_creator = PPState(shape, C)
+        self.mdl = nn.LSTM(input_size=shape[1]+C, hidden_size=384, num_layers=2, batch_first=True)
         # self.proj = nn.Linear(768, shape[1]+128, bias=False)
         self.avg = nn.AdaptiveAvgPool1d(1)
 
@@ -300,9 +306,9 @@ class LSTMAgg(StateAgg):
 
 
 class AvgAgg(StateAgg):
-    def __init__(self, shape):
-        super(AvgAgg, self).__init__(shape)
-        self.state_creator = PPState(shape)
+    def __init__(self, shape, C):
+        super(AvgAgg, self).__init__(shape, C)
+        self.state_creator = PPState(shape, C)
         self.avg_mdl = nn.AdaptiveAvgPool1d(1)
 
     def seq_mdl(self, states):
@@ -312,10 +318,11 @@ class AvgAgg(StateAgg):
 class SFBaseEC(SFBase):
     def __init__(self, cfg, comm):
         super(SFBaseEC, self).__init__(cfg, comm)
-        din = sum(self.head.dim_in)+256
+        din = sum(self.head.dim_in)+2*self.cfg.C
         self.vfeat_head = nn.Linear(din, 768)
-        self.slow_agg = AvgAgg((5, 2048, 8, 7, 7))
-        self.fast_agg = AvgAgg((5, 256, 32, 7, 7))
+        self.slow_agg = AvgAgg((5, 2048, 8, 7, 7), self.cfg.C)
+        self.fast_agg = AvgAgg((5, 256, 32, 7, 7), self.cfg.C)
+        self.num_obj = self.cfg.num_obj
 
     def forward_encoder(self, inp):
         feats_used = self.get_feats(inp)
@@ -323,14 +330,14 @@ class SFBaseEC(SFBase):
         feat_out = self.sf_mdl.forward_features(feats_used)
         assert len(feat_out) == nfeats_used
 
-        bbox = inp['obj_bbox_slow']
+        bbox = inp['obj_bbox_slow'][:, :, :self.num_obj]
         B = len(bbox)
         frm_feat = feat_out[0].view(B, 5, 2048, 8, 7, 7)
-        obj_feat_slow = self.slow_agg(frm_feat, bbox).view(B, 5, -1, 2048+128)
+        obj_feat_slow = self.slow_agg(frm_feat, bbox).view(B, 5, -1, 2048+self.cfg.C)
 
-        bbox = inp['obj_bbox_fast']
+        bbox = inp['obj_bbox_fast'][:, :, :self.num_obj]
         frm_feat = feat_out[1].view(B, 5, 256, 32, 7, 7)
-        obj_feat_fast = self.fast_agg(frm_feat, bbox).view(B, 5, -1, 256+128)
+        obj_feat_fast = self.fast_agg(frm_feat, bbox).view(B, 5, -1, 256+self.cfg.C)
 
         obj_feat_org = torch.cat([obj_feat_slow, obj_feat_fast], dim=3)
         obj_feat = self.vfeat_head(obj_feat_org)
@@ -539,11 +546,11 @@ class SFBaseECCat(SFBaseEC):
         proj_out = self.proj_head(out)
         out = proj_out.view(B, 5, -1)
         assert out.size(-1) == len(self.comm.vb_id_vocab)
-        return out
+        return out, head_out
 
     def forward(self, inp: Dict):
         feat_out, obj_feat, _ = self.forward_encoder(inp)
-        mdl_out = self.forward_decoder(feat_out, obj_feat, inp)
+        mdl_out, _ = self.forward_decoder(feat_out, obj_feat, inp)
 
         return {"mdl_out": mdl_out, "obj_feat": obj_feat}
 
@@ -556,6 +563,7 @@ class SFBaseRel(SFBaseECCat):
     """
     def __init__(self, cfg, comm):
         super(SFBaseRel, self).__init__(cfg, comm)
+        self.num_obj += 1
 
     def union_box(self, bbox, union):
         # rel = torch.zeros((bbox.shape[0], bbox.shape[1], 1, bbox.shape[3], 4), device="cuda", dtype=torch.int64)
@@ -579,7 +587,7 @@ class SFBaseRel(SFBaseECCat):
         inp['obj_bbox_slow'] = self.union_box(inp['obj_bbox_slow'], inp['obj_bbox_union_slow'])
         inp['obj_bbox_fast'] = self.union_box(inp['obj_bbox_fast'], inp['obj_bbox_union_fast'])
         feat_out, obj_feat, _ = self.forward_encoder(inp)
-        mdl_out = self.forward_decoder(feat_out, obj_feat, inp)
+        mdl_out, _ = self.forward_decoder(feat_out, obj_feat, inp)
 
         return {"mdl_out": mdl_out, "obj_feat": obj_feat}
                     
@@ -1211,14 +1219,12 @@ class Reorderer:
 def get_head_dim(full_cfg) -> int:
     if "i3d" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
         head_dim = 2048
-    elif "slowfast_ec" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
+    elif "slowfast_ave" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
         head_dim = 3072
-    elif (
-        ("slow_fast" in full_cfg.ds.vsitu.vsit_frm_feats_dir) 
-        or ("sfast" in full_cfg.ds.vsitu.vsit_frm_feats_dir) 
-        or ("slowfast" in full_cfg.ds.vsitu.vsit_frm_feats_dir)
-    ):
-        head_dim = 2304
+    elif "slowfast_ave_disp" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
+        head_dim = 3072
+    elif "slowfast_ave_disp_rel" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
+        head_dim = 3840
     else:
         raise NotImplementedError
     return head_dim
@@ -1271,6 +1277,9 @@ class SFPreFeats_TxEncDec(Simple_TxDec, Reorderer):
         frm_feats = inp["frm_feats"]
         B = inp["vseg_idx"].size(0)
         assert frm_feats.size(1) == 5
+        # obj_feat = frm_feats[:, :, 2304:8448].view(B, 5, 8, 768)
+        # obj_feat = torch.mean(obj_feat, dim=2).squeeze()
+        # frm_feats = torch.cat([frm_feats[:, :, :2304], obj_feat, frm_feats[:, :, 8448:]], dim=-1)
         out = self.vid_feat_encoder(frm_feats)
         out = out.view(B, 5, -1)
 

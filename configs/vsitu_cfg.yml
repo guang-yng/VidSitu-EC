@@ -70,6 +70,8 @@ mdl:
   use_old_tok: false
   tx_enc_type: 'old'
   tx_dec_type: 'txdec'
+  num_obj: 8
+  C: 128
 
 misc:
   tmp_path: './tmp'

@@ -100,9 +100,9 @@ class FeatExtract:
         vseg_lst = self.dl.dataset.vseg_lst
         for batch in tqdm(self.dl):
             batch_gpu = move_to(batch, torch.device("cuda"))
-            feat_out = self.mdl.forward_encoder(batch_gpu)
             B = len(batch["vseg_idx"])
             if not self.dl.dataset.comm.need_objs:
+                feat_out = self.mdl.forward_encoder(batch_gpu)
                 head_out = self.mdl.head(feat_out)
                 head_out = head_out.permute((0, 2, 3, 4, 1))
                 assert head_out.size(1) == 1
@@ -110,9 +110,23 @@ class FeatExtract:
                 assert head_out.size(3) == 1
                 out = head_out.view(B, 5, -1)
             else:
-                obj_out = feat_out[1]
-                head_out = self.mdl.head(feat_out[0])
-                out  = torch.cat([head_out.view(B, 5, -1), obj_out.mean(dim=-2)], dim=-1)
+                feat_out, obj_feat, _ = self.mdl.forward_encoder(batch_gpu)
+                head_out = self.mdl.head(feat_out)
+                head_out = head_out.permute((0, 2, 3, 4, 1))
+                head_out = head_out.view(B, 5, -1)
+                obj_feat = obj_feat.view(B, 5, -1, 768)
+                if obj_feat.shape[2] == 8:
+                    out = torch.cat([head_out, obj_feat.mean(dim=2)], dim=-1)
+                elif obj_feat.shape[2] == 9:
+                    out = torch.cat([head_out, obj_feat[:, :, :8].mean(dim=2), obj_feat[:, :, 9]], dim=-1)
+                else:
+                    raise NotImplementedError
+                # print(out.shape)
+                # print(all_out['obj_feat'].shape)
+                # exit(0)
+                # obj_out = feat_out[1]
+                # head_out = self.mdl.head(feat_out[0])
+                # out  = torch.cat([head_out.view(B, 5, -1), obj_out.mean(dim=-2)], dim=-1)
             # (B, C, T, H, W) -> (B, T, H, W, C).
             out_np = out.cpu().numpy()
 
@@ -174,7 +188,7 @@ def main(mdl_resume_path: str, mdl_name_used: str, is_cu: bool = False, **kwargs
         )
 
     mdl.to(torch.device("cuda"))
-
+# "test_evrel", "valid", "train", 
     for split_type in ["test_evrel", "valid", "train", "test_verb", "test_srl"]:
         if comm is None:
             comm = {}
