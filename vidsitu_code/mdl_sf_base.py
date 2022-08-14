@@ -1219,12 +1219,12 @@ class Reorderer:
 def get_head_dim(full_cfg) -> int:
     if "i3d" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
         head_dim = 2048
+    elif "slowfast_ave_dis_rel" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
+        head_dim = 3072
+    elif "slowfast_ave_dis" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
+        head_dim = 3072
     elif "slowfast_ave" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
         head_dim = 3072
-    elif "slowfast_ave_disp" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
-        head_dim = 3072
-    elif "slowfast_ave_disp_rel" in full_cfg.ds.vsitu.vsit_frm_feats_dir:
-        head_dim = 3840
     else:
         raise NotImplementedError
     return head_dim

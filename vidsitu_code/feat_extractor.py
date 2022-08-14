@@ -82,6 +82,31 @@ class VsituDS_All(VsituDS):
         return len(self.vseg_lst)
 
 
+class FeatMdl(torch.nn.Module):
+    def __init__(self, mdl, mdl_name):
+        super().__init__()
+        self.mdl = mdl
+        self.mdl_name = mdl_name
+
+    def forward(self, x):
+        if 'rel' in self.mdl_name:
+            x['obj_bbox_slow'] = self.mdl.union_box(x['obj_bbox_slow'], x['obj_bbox_union_slow'])
+            x['obj_bbox_fast'] = self.mdl.union_box(x['obj_bbox_fast'], x['obj_bbox_union_fast'])
+        B = len(x["vseg_idx"])
+        feat_out, obj_feat, _ = self.mdl.forward_encoder(x)
+        head_out = self.mdl.head(feat_out)
+        head_out = head_out.permute((0, 2, 3, 4, 1))
+        head_out = head_out.view(B, 5, -1)
+        obj_feat = obj_feat.view(B, 5, -1, 768)
+        if obj_feat.shape[2] >= 8:
+            out = torch.cat([head_out, obj_feat.mean(dim=2)], dim=-1)
+        # elif obj_feat.shape[2] == 9:
+        #     out = torch.cat([head_out, obj_feat[:, :, :8].mean(dim=2), obj_feat[:, :, 8]], dim=-1)
+        else:
+            raise NotImplementedError
+        return out
+
+
 class FeatExtract:
     def __init__(self, cfg: CN):
         self.cfg = cfg
@@ -99,28 +124,10 @@ class FeatExtract:
     def forward_all(self):
         vseg_lst = self.dl.dataset.vseg_lst
         for batch in tqdm(self.dl):
-            batch_gpu = move_to(batch, torch.device("cuda"))
             B = len(batch["vseg_idx"])
-            if not self.dl.dataset.comm.need_objs:
-                feat_out = self.mdl.forward_encoder(batch_gpu)
-                head_out = self.mdl.head(feat_out)
-                head_out = head_out.permute((0, 2, 3, 4, 1))
-                assert head_out.size(1) == 1
-                assert head_out.size(2) == 1
-                assert head_out.size(3) == 1
-                out = head_out.view(B, 5, -1)
-            else:
-                feat_out, obj_feat, _ = self.mdl.forward_encoder(batch_gpu)
-                head_out = self.mdl.head(feat_out)
-                head_out = head_out.permute((0, 2, 3, 4, 1))
-                head_out = head_out.view(B, 5, -1)
-                obj_feat = obj_feat.view(B, 5, -1, 768)
-                if obj_feat.shape[2] == 8:
-                    out = torch.cat([head_out, obj_feat.mean(dim=2)], dim=-1)
-                elif obj_feat.shape[2] == 9:
-                    out = torch.cat([head_out, obj_feat[:, :, :8].mean(dim=2), obj_feat[:, :, 9]], dim=-1)
-                else:
-                    raise NotImplementedError
+            batch_gpu = move_to(batch, torch.device("cuda"))
+
+            out = self.mdl.forward(batch_gpu)
                 # print(out.shape)
                 # print(all_out['obj_feat'].shape)
                 # exit(0)
@@ -187,7 +194,8 @@ def main(mdl_resume_path: str, mdl_name_used: str, is_cu: bool = False, **kwargs
             convert_from_caffe2=True,
         )
 
-    mdl.to(torch.device("cuda"))
+    #mdl.to(torch.device("cuda"))
+    mdl = torch.nn.DataParallel(FeatMdl(mdl.to(torch.device("cuda")), mdl_name_used))
 # "test_evrel", "valid", "train", 
     for split_type in ["test_evrel", "valid", "train", "test_verb", "test_srl"]:
         if comm is None:
