@@ -25,7 +25,7 @@ class DataWrap:
 def make_data_sampler(dataset: Dataset, shuffle: bool, distributed: bool) -> Sampler:
     if distributed:
         # return NewDistributedSampler(dataset, shuffle=shuffle)
-        return DistributedSampler(dataset=dataset, shuffle=shuffle)
+        return DistributedSampler(dataset=dataset, shuffle=False)
     if shuffle:
         sampler = torch.utils.data.sampler.RandomSampler(dataset)
     else:
@@ -96,6 +96,9 @@ def simple_collate_dct_list(
     else:
         batch_size = len(batch) * batch[0][all_keys[0]].shape[0]
     for k in all_keys:
+        if not isinstance(batch[0][k], torch.Tensor):
+            out_dict[k] = [b[k] for b in batch]
+            continue
         shape = batch[0][k].shape
         if not all([b[k].shape == shape for b in batch]):
             raise NotImplementedError

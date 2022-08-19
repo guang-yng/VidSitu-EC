@@ -313,6 +313,7 @@ class VsituDS(Dataset):
             obj_conf = []
             obj_bbox_union_fast = []
             obj_bbox_union_slow = []
+            obj_cls = []
             for ev in range(1, 6):
                 ev_id = f"Ev{ev}"
                 center_ix = self.comm.cent_frm_per_ev[ev_id]
@@ -340,6 +341,7 @@ class VsituDS(Dataset):
                 confidence_list.sort(reverse=True)
                 bbox_all = []
                 conf_all = []
+                cls_all = []
                 for c, k in confidence_list:
                     bbox = []
                     frm_dct = obj_dict[k]
@@ -354,6 +356,13 @@ class VsituDS(Dataset):
                             bbox.append([floor(x0/1280*7), floor(y0/720*7), floor(x1/1280*7)+1, floor(y1/720*7)+1])
 
                     bbox_all.append(bbox)
+                    keys = frm_dct.keys()
+                    if len(keys) != 0:
+                        cls_all.append(frm_dct[list(keys)[0]]['obj_cls'])
+                    else:
+                        print(vseg_id, ev)
+                        print("Error")
+                        exit(0)
                     conf_all.append(c)
 
                 if len(bbox_all) < 8:
@@ -361,6 +370,7 @@ class VsituDS(Dataset):
                     n_frms = len(frms_ixs_for_ev)
                     bbox_all += [[[0, 0, 0, 0] for _ in range(n_frms)] for i in range(rem)]
                     conf_all += [0.0 for i in range(rem)]
+                    cls_all += ['pad' for i in range(rem)]
                 bbox_fast = torch.tensor(bbox_all[:8])
                 bbox_slow = torch.index_select(
                     bbox_fast,
@@ -397,6 +407,7 @@ class VsituDS(Dataset):
                     bbox_slow_union.append(union_box)
 
                 bbox_conf = torch.tensor(conf_all[:8])
+                obj_cls.append(cls_all[:8])
                 obj_bbox_fast.append(bbox_fast)
                 obj_bbox_slow.append(bbox_slow)
                 obj_conf.append(bbox_conf)
@@ -407,6 +418,7 @@ class VsituDS(Dataset):
                 "obj_bbox_fast": torch.stack(obj_bbox_fast),
                 "obj_bbox_slow": torch.stack(obj_bbox_slow),
                 "obj_conf": torch.stack(obj_conf),
+                "obj_cls": obj_cls,
                 "obj_bbox_union_fast": torch.stack(obj_bbox_union_fast),
                 "obj_bbox_union_slow": torch.stack(obj_bbox_union_slow),
             }
@@ -783,6 +795,7 @@ class VsituDS(Dataset):
         return label_out_dct
 
     def vb_only_item_getter(self, idx: int):
+        idx = 70
         frms_out_dct = self.get_frms_all(idx)
 
         frms_out_dct["vseg_idx"] = torch.tensor(idx)

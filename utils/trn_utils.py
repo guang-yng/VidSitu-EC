@@ -609,8 +609,20 @@ class Learner:
         trn_loss = SmoothenDict(self.loss_keys, 0.9)
         trn_acc = SmoothenDict(self.met_keys, 0.9)
         # synchronize()
+        # for id, v in enumerate(self.data.train_dl.dataset.vseg_lst):
+        #     if v == "v_7wSQMwlqy0s_seg_100_110":
+        #         print(id)
+        #         exit(0)
         for batch_id, batch in enumerate(progress_bar(self.data.train_dl, parent=mb)):
 
+            if self.data.train_dl.dataset.vseg_lst[batch['vseg_idx'][0]] == "v_7wSQMwlqy0s_seg_100_110":
+                print("Find it")
+                obj_cls = batch['obj_cls']
+                out = self.eval_fn.forward_one_batch(self.mdl, batch)
+                # print(out)
+            else:
+                print(batch['vseg_idx'])
+                continue
             # Increment number of iterations
             self.num_it += 1
             batch = move_to(batch, self.device)
@@ -819,7 +831,7 @@ class Learner:
         # Print logger at the start of the training loop
         self.logger.info(self.cfg)
         # Initialize the progress_bar
-        mb = master_bar(range(self.num_epoch, epochs))
+        mb = master_bar(range(self.num_epoch, epochs+1))
         # Initialize optimizer
         # Prepare Optimizer may need to be re-written as per use
         self.optimizer = self.prepare_optimizer(params_opt_dict)

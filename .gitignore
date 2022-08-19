@@ -21,4 +21,5 @@ eval.sh
 
 *.pkl
 *.pt
-*.np
+*.npy
+*.pdf

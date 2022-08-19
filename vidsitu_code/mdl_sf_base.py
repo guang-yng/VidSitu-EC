@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from torch import nn
 from torch.nn import functional as F
 from abc import ABC
@@ -539,7 +540,13 @@ class SFBaseECCat(SFBaseEC):
 
         head_out = head_out.view(B*5, -1, 768)
         obj_feat = obj_feat.view(B*5, -1, 768)
-        inp = torch.cat([head_out, obj_feat[:, :, ]], dim=1)
+        t_input = torch.cat([head_out, obj_feat[:, :, ]], dim=1)
+        for i in range(t_input.shape[0]):
+            Q = t_input[i]
+            K = t_input[i]
+            atten = Q @ K.T/27.71
+            np.save(f"{i}.np", [atten.detach().cpu().numpy(), inp['obj_cls'][0][i]])
+        exit(0)
         out = self.trans(inp)
         out = out[:, :3, ].flatten(start_dim=1)
 
