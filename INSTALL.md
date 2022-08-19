@@ -6,10 +6,8 @@ Requirements:
 + python>=3.6
 + pytorch==1.5 (should work with pytorch >=1.5 as well but not tested)
 
-1. Clone the repo:
+1. Unzip the repo and set the root directory:
     ```
-    git clone https://github.com/TheShadow29/VidSitu.git
-    cd VidSitu
     export ROOT=$(pwd)
     ```
 
@@ -50,8 +48,6 @@ Please refer to [Miniconda](https://docs.conda.io/en/latest/miniconda.html) for 
     ```
 
     + coco-caption: (NOTE: You may need to install java). No additional steps are needed.
-
-    Alternatively, you can run `bash $ROOT/scripts/install_all.sh`
 
     + coval:
     ```
