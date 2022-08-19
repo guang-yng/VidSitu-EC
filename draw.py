@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.special import softmax
 import matplotlib
 import matplotlib.pyplot as plt
 
@@ -122,15 +123,15 @@ def annotate_heatmap(im, data=None, valfmt="{x:.2f}",
 
 
 for i in range(5):
-    tensor, obj_cls = np.load(f"{i}.npy", allow_pickle=True)
-    heat = np.log(tensor+1)
+    tensor, obj_cls = np.load(f"{i}.np.npy", allow_pickle=True)
+    heat = softmax(tensor, axis=1)*100
+    print(heat)
     fig, ax = plt.subplots()
-    x = [0, 1, 2] + obj_cls
+    x = ['g0', 'g1', 'g2', 'm0', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'i'] 
     y = x
-    print(x, y)
 
     im, cbar = heatmap(heat, x, y, ax=ax,
-                    cmap="YlGn", cbarlabel="ln(attention_value+1)")
+                    cmap="YlGn", cbarlabel="Attention Value")
     texts = annotate_heatmap(im, valfmt="{x:.1f}")
 
     fig.tight_layout()
