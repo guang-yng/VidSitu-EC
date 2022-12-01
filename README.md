@@ -3,8 +3,9 @@
 [![Python](https://img.shields.io/badge/python-3.6-blue)](https://www.python.org/)
 ![PyTorch](https://img.shields.io/badge/pytorch-1.5-yellow)
 
-**Video Evnet Extraction via Tracking Visual States of Arguments**<br>
-Anonymous Submission to AAAI 2023 <br>
+**[Video Evnet Extraction via Tracking Visual States of Arguments](https://arxiv.org/pdf/2211.01781.pdf)**<br>
+Guang Yang, Manling Li, Jiajie Zhang, Xudong Lin, Shih-Fu Chang, Heng Ji<br>
+AAAI 2023 <br>
 
 Video event extraction aims to detect salient events from a video and identify the arguments for each event as well as their semantic roles. Inspired by the definition of events as changes of  states, we propose a novel framework to detect video events by tracking the changes in the visual states of all involved arguments, which are expected to provide the most informative evidence for the extraction of video events. In order to capture the visual state changes of arguments, we decompose them into changes in pixels within objects, displacements of objects, and interactions among multiple arguments. We further propose Object State Embedding, Object Motion-aware Embedding and Argument Interaction Embedding to encode and track these changes respectively.
 
